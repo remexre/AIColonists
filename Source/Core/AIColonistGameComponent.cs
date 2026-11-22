@@ -254,6 +254,7 @@ namespace AIColonists.Core
                     topP = MoodEntropyMapper.MoodToTopP(snapshot.MoodPercentage),
                     minP = s.MinP,
                     maxTokens = s.Layer1MaxOutputTokens,
+                    disableReasoning = s.DisableReasoning,
                     optionCount = snapshot.Affordances != null ? snapshot.Affordances.Count : 0,
                 };
 
@@ -583,6 +584,7 @@ namespace AIColonists.Core
                     temperature = s.BaseTemperature,
                     minP = s.MinP,
                     maxTokens = s.Layer3MaxOutputTokens,
+                    disableReasoning = s.DisableReasoning,
                 };
 
                 string thingId = pawn.ThingID;

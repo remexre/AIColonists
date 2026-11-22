@@ -37,17 +37,20 @@ namespace AIColonists.Core
 
         public readonly List<Entry> Entries = new List<Entry>();
         public readonly int requestTimeoutMs;
+        public readonly bool disableReasoning;
 
         private readonly Func<string, string, int, Task<ProviderTestResult>> probe;
         private Task running;
 
-        public ProviderTester(Settings s) : this(s, (url, model, maxTokens) => LlamaServerClient.TestProviderAsync(url, model, maxTokens)) { }
+        public ProviderTester(Settings s) : this(s, null) { }
 
         /// <summary>Probe injection point for the harness.</summary>
         public ProviderTester(Settings s, Func<string, string, int, Task<ProviderTestResult>> probe)
         {
-            this.probe = probe;
             requestTimeoutMs = s.RequestTimeoutMs;
+            disableReasoning = s.DisableReasoning;
+            bool noReasoning = disableReasoning; // snapshot for the closure
+            this.probe = probe ?? ((url, model, maxTokens) => LlamaServerClient.TestProviderAsync(url, model, maxTokens, noReasoning));
             // Each layer probes with its real output budget, so reasoning models that can't fit show up here.
             Entries.Add(new Entry("Layer 1 (impulses)", s.Layer1ServerUrl, s.Layer1Model, s.Layer1MaxOutputTokens));
             Entries.Add(new Entry("Layer 2 (room social)", s.Layer2ServerUrl, s.Layer2Model, s.Layer2MaxOutputTokens));
@@ -94,7 +97,7 @@ namespace AIColonists.Core
             string line = "OK in " + (r.latencyMs / 1000.0).ToString("0.0") + " s — replied \"" + r.message + "\"";
             // Over half the budget on thinking for a one-word answer: real (much longer) answers will likely be cut off.
             if (r.maxTokens > 0 && r.reasoningTokens * 2 > r.maxTokens)
-                line += ". Spent " + r.reasoningTokens + " of its " + r.maxTokens + " tokens reasoning just to say that, so real answers will likely get cut off: raise this layer's max output tokens (Requests section of the settings), or pick a non-reasoning model.";
+                line += ". Spent " + r.reasoningTokens + " of its " + r.maxTokens + " tokens reasoning just to say that, so real answers will likely get cut off: turn on \"Turn off model reasoning\" in the settings, or raise this layer's max output tokens.";
             if (r.latencyMs > requestTimeoutMs)
                 line += ". Slower than your " + requestTimeoutMs + " ms request timeout, so real calls would time out. A first call can include model load time; try again.";
             return line;

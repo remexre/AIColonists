@@ -47,6 +47,11 @@ namespace AIColonists.Core
         public int Layer2MaxOutputTokens = 150;
         public int Layer3MaxOutputTokens = 350;
 
+        // Sends reasoning_effort:"none" on every request. Reasoning models (live: Inkling 2 mini via OpenRouter) otherwise
+        // spend the whole small output budget thinking and return no content. Off by default: OpenAI's own API rejects
+        // the field for non-reasoning models; llama-server ignores it.
+        public bool DisableReasoning = false;
+
         // Inference timeout — a hung server must never wedge the intent pipeline (Spec §9 Phase 1).
         public int RequestTimeoutMs = 3000;
 
@@ -91,6 +96,7 @@ namespace AIColonists.Core
             Scribe_Values.Look(ref Layer2MaxOutputTokens, "layer2MaxOutputTokens", 150);
             Scribe_Values.Look(ref Layer3MaxOutputTokens, "layer3MaxOutputTokens", 350);
             Scribe_Values.Look(ref RequestTimeoutMs, "requestTimeoutMs", 3000);
+            Scribe_Values.Look(ref DisableReasoning, "disableReasoning", false);
         }
     }
 }

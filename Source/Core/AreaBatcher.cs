@@ -112,6 +112,7 @@ namespace AIColonists.Core
             req.temperature = s != null ? s.BaseTemperature : 0.65f;
             req.minP = s != null ? s.MinP : 0.08f;
             req.maxTokens = s != null ? s.Layer2MaxOutputTokens : 150;
+            req.disableReasoning = s != null && s.DisableReasoning;
 
             var notes = new Dictionary<string, string>();
             foreach (Pawn pawn in batch)

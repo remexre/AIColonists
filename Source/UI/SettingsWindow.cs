@@ -68,6 +68,10 @@ namespace AIColonists.UI
                 "Sampling temperature for all layers. Layer 1 then adds a mood offset and clamps the result to 0.50-0.85.",
                 "temp", ref s.BaseTemperature, 0f, 2f, Defaults.BaseTemperature);
             page.Float("min_p", "Drops unlikely tokens even at higher temperatures. 0 disables it.", "minp", ref s.MinP, 0f, 1f, Defaults.MinP);
+            page.Checkbox("Turn off model reasoning",
+                "Asks reasoning models to answer without thinking first (sends reasoning_effort: \"none\"). Without it they can spend the whole "
+                + "token budget thinking and return nothing. Leave off for OpenAI's own API with non-reasoning models, which rejects the field.",
+                ref s.DisableReasoning, Defaults.DisableReasoning);
             const string tokensTip = "Most tokens the model may produce per request. Reasoning models count their thinking here too, so they need much more (Test providers shows how much they use).";
             page.Int("Layer 1 max output tokens", tokensTip, "tok1", ref s.Layer1MaxOutputTokens, 16, 32768, Defaults.Layer1MaxOutputTokens);
             page.Int("Layer 2 max output tokens", tokensTip, "tok2", ref s.Layer2MaxOutputTokens, 16, 32768, Defaults.Layer2MaxOutputTokens);

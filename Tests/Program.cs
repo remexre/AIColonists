@@ -2082,21 +2082,21 @@ namespace AIColonists.Tests
 
             // 1. Healthy server: ok + the reply text (think blocks stripped like real dispatches).
             var (okUrl, okSrv) = ServeOnce(HttpOkResponse(ChatEnvelope("<think>hmm</think>OK")));
-            var okRes = await LlamaServerClient.TestProviderAsync(okUrl, "m", 80, 5000);
+            var okRes = await LlamaServerClient.TestProviderAsync(okUrl, "m", 80, timeoutMs: 5000);
             await okSrv;
             Check(okRes.ok && okRes.message == "OK", "healthy server: ok, reply 'OK' with <think> stripped (got: " + okRes.message + ")");
             Check(okRes.latencyMs >= 0, "healthy server: latency measured");
 
             // 2. Server answers with an error (e.g. Ollama's unknown-model 404): status + body surface verbatim.
             var (e404Url, e404Srv) = ServeOnce(HttpRawResponse("404 Not Found", "{\"error\":\"model 'nope' not found\"}"));
-            var e404 = await LlamaServerClient.TestProviderAsync(e404Url, "nope", 80, 5000);
+            var e404 = await LlamaServerClient.TestProviderAsync(e404Url, "nope", 80, timeoutMs: 5000);
             await e404Srv;
             Check(!e404.ok && e404.message.Contains("404") && e404.message.Contains("model 'nope' not found"),
                 "HTTP 404: failure carries the status and the server's own error (got: " + e404.message + ")");
 
             // 3. Something that answers 200 but isn't a chat server (wrong port, e.g. a health endpoint or web UI).
             var (oddUrl, oddSrv) = ServeOnce(HttpOkResponse("{\"status\":\"ok\"}"));
-            var odd = await LlamaServerClient.TestProviderAsync(oddUrl, "m", 80, 5000);
+            var odd = await LlamaServerClient.TestProviderAsync(oddUrl, "m", 80, timeoutMs: 5000);
             await oddSrv;
             Check(!odd.ok && odd.message.Contains("OpenAI-compatible"), "200 without chat content: flagged as not a chat server");
 
@@ -2104,7 +2104,7 @@ namespace AIColonists.Tests
             string burnt = "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":null,\"reasoning\":\"The user asks\"}}],"
                 + "\"usage\":{\"completion_tokens\":16,\"completion_tokens_details\":{\"reasoning_tokens\":16}}}";
             var (burntUrl, burntSrv) = ServeOnce(HttpOkResponse(burnt));
-            var burntRes = await LlamaServerClient.TestProviderAsync(burntUrl, "m", 16, 5000);
+            var burntRes = await LlamaServerClient.TestProviderAsync(burntUrl, "m", 16, timeoutMs: 5000);
             await burntSrv;
             Check(!burntRes.ok && burntRes.message.Contains("whole 16-token budget") && burntRes.message.Contains("reasoning model"),
                 "content:null + finish_reason length: explained as a reasoning model out of budget (got: " + burntRes.message + ")");
@@ -2113,16 +2113,36 @@ namespace AIColonists.Tests
             string heavy = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"OK\"}}],"
                 + "\"usage\":{\"completion_tokens\":60,\"completion_tokens_details\":{\"reasoning_tokens\":58}}}";
             var (heavyUrl, heavySrv) = ServeOnce(HttpOkResponse(heavy));
-            var heavyRes = await LlamaServerClient.TestProviderAsync(heavyUrl, "m", 80, 5000);
+            var heavyRes = await LlamaServerClient.TestProviderAsync(heavyUrl, "m", 80, timeoutMs: 5000);
             await heavySrv;
             Check(heavyRes.ok && heavyRes.reasoningTokens == 58 && heavyRes.maxTokens == 80, "reasoning_tokens + budget carried on an ok result");
 
             // 4. Nothing listening, and a URL missing its scheme: both come back as failures, never exceptions.
-            var down = await LlamaServerClient.TestProviderAsync("http://127.0.0.1:9", "m", 80, 5000);
+            var down = await LlamaServerClient.TestProviderAsync("http://127.0.0.1:9", "m", 80, timeoutMs: 5000);
             Check(!down.ok && down.message.StartsWith("unreachable"), "closed port: 'unreachable' failure (got: " + down.message + ")");
             ProviderTestResult noScheme = null;
-            try { noScheme = await LlamaServerClient.TestProviderAsync("localhost:8091", "m", 80, 5000); } catch { }
+            try { noScheme = await LlamaServerClient.TestProviderAsync("localhost:8091", "m", 80, timeoutMs: 5000); } catch { }
             Check(noScheme != null && !noScheme.ok, "URL without http://: failure result, no exception");
+
+            // 4b. "Turn off model reasoning": every body carries reasoning_effort:"none" only when asked.
+            var l1Off = LlamaServerClient.BuildChatCompletionsJson(new Layer1Request { model = "m", optionCount = 2 });
+            var l1On = LlamaServerClient.BuildChatCompletionsJson(new Layer1Request { model = "m", optionCount = 2, disableReasoning = true });
+            var l2On = LlamaServerClient.BuildLayer2Json(new Layer2Request { model = "m", disableReasoning = true });
+            var l3On = LlamaServerClient.BuildLayer3Json(new Layer3Request { model = "m", disableReasoning = true });
+            Check(!l1Off.Contains("reasoning_effort"), "reasoning flag off: body unchanged (no reasoning_effort)");
+            Check(l1On.Contains(",\"reasoning_effort\":\"none\",") && l2On.Contains("\"reasoning_effort\":\"none\"") && l3On.Contains("\"reasoning_effort\":\"none\""),
+                "reasoning flag on: Layer 1/2/3 bodies all send reasoning_effort:\"none\"");
+            try { Newtonsoft.Json.Linq.JObject.Parse(l1On); Newtonsoft.Json.Linq.JObject.Parse(l2On); Newtonsoft.Json.Linq.JObject.Parse(l3On); Check(true, "reasoning flag on: bodies are still valid JSON"); }
+            catch (Exception ex) { Check(false, "reasoning flag on: bodies are still valid JSON (" + ex.Message + ")"); }
+
+            // 4c. Real dispatch hitting the live failure (content:null, budget spent reasoning): actionable error, not "malformed".
+            var (burnUrl, burnSrv) = ServeOnce(HttpOkResponse(burnt));
+            string dispatchErr = null;
+            try { await new LlamaServerClient(new Settings { Layer1ServerUrl = burnUrl, RequestTimeoutMs = 5000 }).RequestLayer1Async(new Layer1Request { model = "m", optionCount = 2 }); }
+            catch (Exception ex) { dispatchErr = ex.Message; }
+            await burnSrv;
+            Check(dispatchErr != null && dispatchErr.Contains("16 tokens went to reasoning") && dispatchErr.Contains("Turn off model reasoning") && !dispatchErr.Contains("Malformed"),
+                "dispatch with content:null + finish_reason length: error explains the reasoning budget and names the setting (got: " + dispatchErr + ")");
 
             // 5. ProviderTester: snapshots settings, probes all three layers in order, formats status lines.
             var s = new Settings
@@ -2156,6 +2176,8 @@ namespace AIColonists.Tests
             Check(heavyTester.StatusLine(heavyTester.Entries[0]).Contains("Spent 58 of its 80 tokens reasoning"),
                 "OK but >half the budget on reasoning: warns real answers will get cut off");
 
+            Check(!tester.disableReasoning && new ProviderTester(new Settings { DisableReasoning = true }).disableReasoning,
+                "tester snapshots the reasoning flag (its real probe sends it, like real requests)");
             var throwing = new ProviderTester(s, (url, model, maxTokens) => throw new InvalidOperationException("boom"));
             await throwing.Start();
             Check(throwing.Done && !throwing.Entries[0].result.ok, "a throwing probe becomes a FAILED entry, tester still finishes");
