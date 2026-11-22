@@ -179,7 +179,7 @@ namespace AIColonists.Inference
                         return ProviderTestResult.Fail(ms, "answered, but not like an OpenAI-compatible chat server: " + Truncate(body));
                     if (ExtractJsonString(body, "finish_reason") == "length")
                         return ProviderTestResult.Fail(ms, "used its whole " + maxTokens + "-token budget without answering"
-                            + (reasoning > 0 ? " (" + reasoning + " tokens went to reasoning). It's a reasoning model: raise this layer's MaxOutputTokens in the mod's config file, or pick a non-reasoning model" : ""), reasoning, maxTokens);
+                            + (reasoning > 0 ? " (" + reasoning + " tokens went to reasoning). It's a reasoning model: raise this layer's max output tokens (Requests section of the settings), or pick a non-reasoning model" : ""), reasoning, maxTokens);
                     return ProviderTestResult.Fail(ms, "replied with no content: " + Truncate(body), reasoning, maxTokens);
                 }
             }

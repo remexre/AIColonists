@@ -142,6 +142,7 @@ namespace AIColonists.Tests
             await Test_TransportSingleFlightAsync();      // Mono concurrent-send fix: gate serializes all layers
             await Test_TransportRetryOnSendFailureAsync(); // one retry on transport failure only
             await Test_ProviderTestAsync(); // settings "Test providers" button: probe outcomes + tester + dialog smoke
+            Test_SettingsPage(); // every Settings field has a control; scrolling; reset-to-defaults scope
             Test_MemoryThoughtDefs(); // mood bridge: def wiring + calibration (no code — granted by vanilla machinery)
             Test_UiSmoke();
 
@@ -2172,6 +2173,46 @@ namespace AIColonists.Tests
             }
             catch (Exception e) { drew = false; Console.WriteLine("    " + e); }
             Check(drew, "dialog: DoWindowContents draws pending and finished states without throwing");
+        }
+
+        static void Test_SettingsPage()
+        {
+            Section("Settings page: every field has a control, page scrolls, reset scope");
+            var fields = typeof(Settings).GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            Check(fields.Length >= 20, "Settings exposes its fields (found " + fields.Length + ")");
+
+            // Poke mode: one draw where every control changes its bound value. Any field still at its default has no control.
+            var poked = new Settings();
+            var defaults = new Settings();
+            AIColonists.UI.SettingsWindow.Draw(new UnityEngine.Rect(0f, 0f, 860f, 560f), new Settings()); // warm-up: measures height
+            TestRig.UiPoke = true;
+            try { AIColonists.UI.SettingsWindow.Draw(new UnityEngine.Rect(0f, 0f, 860f, 560f), poked); }
+            finally { TestRig.UiPoke = false; }
+            var untouched = new List<string>();
+            foreach (var f in fields)
+                if (Equals(f.GetValue(poked), f.GetValue(defaults))) untouched.Add(f.Name);
+            Check(untouched.Count == 0, "every public Settings field is wired to a UI control (no control: " + string.Join(", ", untouched) + ")");
+
+            Check(AIColonists.UI.SettingsWindow.ContentHeight > 560f,
+                "content (" + AIColonists.UI.SettingsWindow.ContentHeight + " px) is taller than the dialog body, so the page scrolls");
+
+            AIColonists.UI.SettingsWindow.Draw(new UnityEngine.Rect(0f, 0f, 860f, 560f), null); // must not throw
+
+            // Reset tuning: sampling/tokens/timing back to defaults; switches, servers, models, timeout kept.
+            var s = new Settings
+            {
+                EnableAI = true, AIFirstJobPriority = false,
+                Layer1ServerUrl = "https://x", Layer1Model = "mx", RequestTimeoutMs = 12345,
+                BaseTemperature = 1.3f, MinP = 0.5f, Layer1MaxOutputTokens = 999, Layer3MaxOutputTokens = 4000,
+                Layer2MinGameTicks = 60, Layer3MinRealSeconds = 5f,
+            };
+            s.ResetTuningToDefaults();
+            Check(s.BaseTemperature == defaults.BaseTemperature && s.MinP == defaults.MinP
+                && s.Layer1MaxOutputTokens == defaults.Layer1MaxOutputTokens && s.Layer3MaxOutputTokens == defaults.Layer3MaxOutputTokens
+                && s.Layer2MinGameTicks == defaults.Layer2MinGameTicks && s.Layer3MinRealSeconds == defaults.Layer3MinRealSeconds,
+                "reset: temperature, min_p, token budgets and timing back to defaults");
+            Check(s.EnableAI && !s.AIFirstJobPriority && s.Layer1ServerUrl == "https://x" && s.Layer1Model == "mx" && s.RequestTimeoutMs == 12345,
+                "reset: switches, URLs, models and timeout untouched");
         }
 
         // ------------------------------------------------------------ mood bridge defs (Spec §7.3 emotional shift)

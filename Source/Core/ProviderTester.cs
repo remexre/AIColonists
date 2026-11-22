@@ -94,7 +94,7 @@ namespace AIColonists.Core
             string line = "OK in " + (r.latencyMs / 1000.0).ToString("0.0") + " s — replied \"" + r.message + "\"";
             // Over half the budget on thinking for a one-word answer: real (much longer) answers will likely be cut off.
             if (r.maxTokens > 0 && r.reasoningTokens * 2 > r.maxTokens)
-                line += ". Spent " + r.reasoningTokens + " of its " + r.maxTokens + " tokens reasoning just to say that, so real answers will likely get cut off: raise this layer's MaxOutputTokens in the mod's config file, or pick a non-reasoning model.";
+                line += ". Spent " + r.reasoningTokens + " of its " + r.maxTokens + " tokens reasoning just to say that, so real answers will likely get cut off: raise this layer's max output tokens (Requests section of the settings), or pick a non-reasoning model.";
             if (r.latencyMs > requestTimeoutMs)
                 line += ". Slower than your " + requestTimeoutMs + " ms request timeout, so real calls would time out. A first call can include model load time; try again.";
             return line;

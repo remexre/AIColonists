@@ -41,6 +41,8 @@ namespace UnityEngine
         // [CONFIRMED] Verse.Text.CurFontStyle — per-font cached GUIStyle (white text on Arial_small); the tab derives its
         // wrap style from it so wrapped blocks match vanilla color/font exactly.
         public static GUIStyle CurFontStyle => new GUIStyle();
+        // [CONFIRMED 2026-11-22 against 1.7] Verse.Text.CalcHeight(string, float). Stub: one tiny-font line per 100 chars.
+        public static float CalcHeight(string text, float width) => 18f * (1 + (text ?? "").Length / 100);
     }
     // [CONFIRMED] 1.6: GUI/Text live in UnityEngine.IMGUIModule.dll (NOT CoreModule).
     // [CONFIRMED] 1.6: GUI.color / GUI.DrawTexture(Rect, Texture2D) are the standard bar-drawing primitives —
@@ -219,12 +221,31 @@ namespace Verse
     // [CONFIRMED] There is NO style-taking Label overload in Verse.Widgets (1.6) — the full Label family was dumped
     // from the real DLL: (Rect, GUIContent), (Rect, string), (Rect, TaggedString), (float, ref float, float, string),
     // (Rect, ref float, string). Word-wrapped text goes through UnityEngine.GUI.Label(Rect, string, GUIStyle) instead.
+    // [CONFIRMED 2026-11-22] BeginScrollView/EndScrollView, TextFieldNumeric<T>(Rect, ref T, ref string, float, float),
+    // DrawLineHorizontal, DrawHighlightIfMouseover: compile-checked against the real 1.7.5014 DLL (UI/SettingsWindow).
+    // TestRig.UiPoke makes every input control change what it's bound to (checkbox flips, text gets "~poked", numbers jump
+    // to max) — the settings-coverage test uses it to prove each Settings field is wired to some control.
     public static class Widgets
     {
         public static void Label(UnityEngine.Rect rect, string label) { }
-        public static void CheckboxLabeled(UnityEngine.Rect rect, string label, ref bool checkOn) { }
-        public static string TextField(UnityEngine.Rect rect, string text) => text;
+        public static void CheckboxLabeled(UnityEngine.Rect rect, string label, ref bool checkOn) { if (TestRig.UiPoke) checkOn = !checkOn; }
+        public static string TextField(UnityEngine.Rect rect, string text) => TestRig.UiPoke ? text + "~poked" : text;
         public static bool ButtonText(UnityEngine.Rect rect, string label) => false;
+        public static void TextFieldNumeric<T>(UnityEngine.Rect rect, ref T val, ref string buffer, float min = 0f, float max = 1E+09f) where T : struct
+        {
+            if (buffer == null) buffer = val.ToString();
+            if (TestRig.UiPoke) { val = (T)Convert.ChangeType(max, typeof(T)); buffer = val.ToString(); }
+        }
+        public static void BeginScrollView(UnityEngine.Rect outRect, ref UnityEngine.Vector2 scrollPosition, UnityEngine.Rect viewRect, bool showScrollbars = true) { }
+        public static void EndScrollView() { }
+        public static void DrawLineHorizontal(float x, float y, float length) { }
+        public static void DrawHighlightIfMouseover(UnityEngine.Rect rect) { }
+    }
+
+    // [CONFIRMED 2026-11-22 against 1.7] Verse.TooltipHandler.TipRegion — the real one takes a TipSignal, which strings convert to.
+    public static class TooltipHandler
+    {
+        public static void TipRegion(UnityEngine.Rect rect, string tip) { }
     }
 
     // [CONFIRMED 2026-11-22] Verse.Window / WindowStack: compile-checked against the real 1.7.5014 Assembly-CSharp.dll
@@ -491,6 +512,7 @@ namespace Verse
     // --- sensory utility hooks (scriptable for tests) ---------------------------------------------------
     public static class TestRig
     {
+        public static bool UiPoke; // see Widgets: input controls mutate their bound values while set
         public static bool CanReachDefault = true;
         public static Thing BestFoodSourceResult;
         public static Thing FindBedForResult;
