@@ -141,6 +141,7 @@ namespace AIColonists.Tests
             await Test_Layer2ServerDownResilienceAsync();
             await Test_TransportSingleFlightAsync();      // Mono concurrent-send fix: gate serializes all layers
             await Test_TransportRetryOnSendFailureAsync(); // one retry on transport failure only
+            await Test_ProviderTestAsync(); // settings "Test providers" button: probe outcomes + tester + dialog smoke
             Test_MemoryThoughtDefs(); // mood bridge: def wiring + calibration (no code — granted by vanilla machinery)
             Test_UiSmoke();
 
@@ -2042,6 +2043,135 @@ namespace AIColonists.Tests
             Check(accepts >= 2, "a fresh connection was made after the first failure (the retry actually retried)");
 
             server.Stop();
+        }
+
+        /// <summary>Raw HTTP response with an arbitrary status line (for error-path probes).</summary>
+        static byte[] HttpRawResponse(string statusLine, string body)
+        {
+            string head = "HTTP/1.1 " + statusLine + "\r\nContent-Type: application/json\r\nContent-Length: "
+                + System.Text.Encoding.UTF8.GetByteCount(body) + "\r\nConnection: close\r\n\r\n";
+            return System.Text.Encoding.UTF8.GetBytes(head + body);
+        }
+
+        /// <summary>Serves exactly one canned response on a fresh loopback port, then stops. Returns (baseUrl, serverTask).</summary>
+        static (string, Task) ServeOnce(byte[] response)
+        {
+            int port = FreeLoopbackPort();
+            var server = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+            server.Start();
+            var t = Task.Run(async () =>
+            {
+                try
+                {
+                    using (var c = await server.AcceptTcpClientAsync())
+                    using (var st = c.GetStream())
+                    {
+                        DrainRequest(st);
+                        await st.WriteAsync(response, 0, response.Length);
+                    }
+                }
+                finally { server.Stop(); }
+            });
+            return ("http://127.0.0.1:" + port, t);
+        }
+
+        static async Task Test_ProviderTestAsync()
+        {
+            Section("Settings: Test providers button (probe, tester, dialog)");
+
+            // 1. Healthy server: ok + the reply text (think blocks stripped like real dispatches).
+            var (okUrl, okSrv) = ServeOnce(HttpOkResponse(ChatEnvelope("<think>hmm</think>OK")));
+            var okRes = await LlamaServerClient.TestProviderAsync(okUrl, "m", 80, 5000);
+            await okSrv;
+            Check(okRes.ok && okRes.message == "OK", "healthy server: ok, reply 'OK' with <think> stripped (got: " + okRes.message + ")");
+            Check(okRes.latencyMs >= 0, "healthy server: latency measured");
+
+            // 2. Server answers with an error (e.g. Ollama's unknown-model 404): status + body surface verbatim.
+            var (e404Url, e404Srv) = ServeOnce(HttpRawResponse("404 Not Found", "{\"error\":\"model 'nope' not found\"}"));
+            var e404 = await LlamaServerClient.TestProviderAsync(e404Url, "nope", 80, 5000);
+            await e404Srv;
+            Check(!e404.ok && e404.message.Contains("404") && e404.message.Contains("model 'nope' not found"),
+                "HTTP 404: failure carries the status and the server's own error (got: " + e404.message + ")");
+
+            // 3. Something that answers 200 but isn't a chat server (wrong port, e.g. a health endpoint or web UI).
+            var (oddUrl, oddSrv) = ServeOnce(HttpOkResponse("{\"status\":\"ok\"}"));
+            var odd = await LlamaServerClient.TestProviderAsync(oddUrl, "m", 80, 5000);
+            await oddSrv;
+            Check(!odd.ok && odd.message.Contains("OpenAI-compatible"), "200 without chat content: flagged as not a chat server");
+
+            // 3b. Reasoning model that burns the whole budget thinking (live: Inkling 2 mini via OpenRouter at 16 tokens).
+            string burnt = "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"role\":\"assistant\",\"content\":null,\"reasoning\":\"The user asks\"}}],"
+                + "\"usage\":{\"completion_tokens\":16,\"completion_tokens_details\":{\"reasoning_tokens\":16}}}";
+            var (burntUrl, burntSrv) = ServeOnce(HttpOkResponse(burnt));
+            var burntRes = await LlamaServerClient.TestProviderAsync(burntUrl, "m", 16, 5000);
+            await burntSrv;
+            Check(!burntRes.ok && burntRes.message.Contains("whole 16-token budget") && burntRes.message.Contains("reasoning model"),
+                "content:null + finish_reason length: explained as a reasoning model out of budget (got: " + burntRes.message + ")");
+
+            // 3c. Answers, but reports heavy reasoning usage (live: 58 of 80 tokens to say "OK").
+            string heavy = "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"OK\"}}],"
+                + "\"usage\":{\"completion_tokens\":60,\"completion_tokens_details\":{\"reasoning_tokens\":58}}}";
+            var (heavyUrl, heavySrv) = ServeOnce(HttpOkResponse(heavy));
+            var heavyRes = await LlamaServerClient.TestProviderAsync(heavyUrl, "m", 80, 5000);
+            await heavySrv;
+            Check(heavyRes.ok && heavyRes.reasoningTokens == 58 && heavyRes.maxTokens == 80, "reasoning_tokens + budget carried on an ok result");
+
+            // 4. Nothing listening, and a URL missing its scheme: both come back as failures, never exceptions.
+            var down = await LlamaServerClient.TestProviderAsync("http://127.0.0.1:9", "m", 80, 5000);
+            Check(!down.ok && down.message.StartsWith("unreachable"), "closed port: 'unreachable' failure (got: " + down.message + ")");
+            ProviderTestResult noScheme = null;
+            try { noScheme = await LlamaServerClient.TestProviderAsync("localhost:8091", "m", 80, 5000); } catch { }
+            Check(noScheme != null && !noScheme.ok, "URL without http://: failure result, no exception");
+
+            // 5. ProviderTester: snapshots settings, probes all three layers in order, formats status lines.
+            var s = new Settings
+            {
+                Layer1ServerUrl = "http://a", Layer1Model = "m1",
+                Layer2ServerUrl = "http://b", Layer2Model = "m2",
+                Layer3ServerUrl = "http://c", Layer3Model = "m3",
+                RequestTimeoutMs = 3000,
+            };
+            var order = new List<string>();
+            var tester = new ProviderTester(s, (url, model, maxTokens) =>
+            {
+                lock (order) order.Add(url + "|" + model + "|" + maxTokens);
+                if (url == "http://a") return Task.FromResult(ProviderTestResult.Ok(1200, "OK", 10, maxTokens));
+                if (url == "http://b") return Task.FromResult(ProviderTestResult.Ok(4500, "OK"));
+                return Task.FromResult(ProviderTestResult.Fail(5, "unreachable: refused"));
+            });
+            s.Layer1ServerUrl = "http://edited-after-click";
+            Check(!tester.Done && tester.StatusLine(tester.Entries[0]) == "waiting", "before Start: not done, entries waiting");
+            await tester.Start();
+            Check(tester.Done, "after Start completes: Done");
+            Check(string.Join(",", order) == "http://a|m1|80,http://b|m2|150,http://c|m3|350",
+                "probes ran once per layer, in order, with each layer's URL/model/token budget snapshotted at construction (got: " + string.Join(",", order) + ")");
+            Check(tester.StatusLine(tester.Entries[0]).StartsWith("OK in 1.2 s") && !tester.StatusLine(tester.Entries[0]).Contains("Slower"),
+                "fast OK: plain success line (got: " + tester.StatusLine(tester.Entries[0]) + ")");
+            Check(tester.StatusLine(tester.Entries[1]).Contains("Slower than your 3000 ms request timeout"),
+                "OK but slower than RequestTimeoutMs: warns real calls would time out");
+            Check(tester.StatusLine(tester.Entries[2]) == "FAILED: unreachable: refused", "failure: FAILED + message");
+            var heavyTester = new ProviderTester(s, (url, model, maxTokens) => Task.FromResult(ProviderTestResult.Ok(900, "OK", 58, 80)));
+            await heavyTester.Start();
+            Check(heavyTester.StatusLine(heavyTester.Entries[0]).Contains("Spent 58 of its 80 tokens reasoning"),
+                "OK but >half the budget on reasoning: warns real answers will get cut off");
+
+            var throwing = new ProviderTester(s, (url, model, maxTokens) => throw new InvalidOperationException("boom"));
+            await throwing.Start();
+            Check(throwing.Done && !throwing.Entries[0].result.ok, "a throwing probe becomes a FAILED entry, tester still finishes");
+
+            // 6. Dialog smoke: constructs, starts probing, draws pending + finished states without throwing.
+            var ds = new Settings { Layer1ServerUrl = "http://127.0.0.1:9", Layer2ServerUrl = "http://127.0.0.1:9", Layer3ServerUrl = "http://127.0.0.1:9" };
+            bool drew = true;
+            try
+            {
+                var dlg = new AIColonists.UI.Dialog_ProviderTest(ds);
+                dlg.DoWindowContents(new UnityEngine.Rect(0f, 0f, 664f, 400f));
+                System.Threading.Thread.Sleep(300); // closed port fails fast
+                dlg.DoWindowContents(new UnityEngine.Rect(0f, 0f, 664f, 400f));
+                Check(dlg.doCloseButton && dlg.InitialSize.y >= 450f, "dialog: has a close button and room for three result blocks");
+            }
+            catch (Exception e) { drew = false; Console.WriteLine("    " + e); }
+            Check(drew, "dialog: DoWindowContents draws pending and finished states without throwing");
         }
 
         // ------------------------------------------------------------ mood bridge defs (Spec §7.3 emotional shift)

@@ -134,6 +134,76 @@ namespace AIColonists.Inference
             }
         }
 
+        /// <summary>
+        /// "Test providers" button (settings dialog): one tiny chat completion against an endpoint, reporting reachability,
+        /// latency and the reply, or the error a real dispatch would hit. Goes through the same SendGate as real
+        /// dispatches (Mono concurrent-send fix) and uses the warmup's long timeout: the first call may include a cold
+        /// model load, and cancelling that mid-load makes Ollama abort it (§22.7). The caller compares latency against
+        /// the configured RequestTimeoutMs. Never throws: every failure comes back as ok=false with a readable message.
+        /// maxTokens should be the layer's real output budget: reasoning models (live finding 2026-11-22, Inkling 2 mini
+        /// via OpenRouter) spend most of a small budget thinking, and at 16 tokens returned content:null with
+        /// finish_reason "length". Probing with the real budget answers "will this model fit", and the reported
+        /// reasoning_tokens shows how close it came.
+        /// </summary>
+        public static async Task<ProviderTestResult> TestProviderAsync(string baseUrl, string model, int maxTokens, int timeoutMs = WarmUpTimeoutMs)
+        {
+            var sb = new StringBuilder(256);
+            sb.Append('{');
+            AppendJsonStringField(sb, "model", model ?? "");
+            sb.Append(",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word OK.\"}],\"max_tokens\":");
+            sb.Append(Math.Max(1, maxTokens).ToString(CultureInfo.InvariantCulture));
+            sb.Append(",\"stream\":false}");
+            string json = sb.ToString();
+
+            string url = TrimSlash(baseUrl ?? "") + "/v1/chat/completions";
+            await SendGate.WaitAsync(); // queue wait is free — latency below measures the request itself
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs)))
+                using (HttpResponseMessage resp = await SharedHttp.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"), cts.Token))
+                {
+                    string body = await resp.Content.ReadAsStringAsync();
+                    long ms = clock.ElapsedMilliseconds;
+                    if (!resp.IsSuccessStatusCode)
+                        return ProviderTestResult.Fail(ms, "HTTP " + (int)resp.StatusCode + " " + resp.ReasonPhrase + ": " + Truncate(body));
+
+                    // usage.completion_tokens_details.reasoning_tokens (OpenAI/OpenRouter); 0 when the server doesn't report it.
+                    int reasoning = ExtractJsonInt(body, "reasoning_tokens");
+                    string content = ExtractJsonString(body, "content");
+                    content = content == null ? "" : StripThinkBlocks(content);
+                    if (content.Length > 0)
+                        return ProviderTestResult.Ok(ms, Truncate(content), reasoning, maxTokens);
+
+                    if (FindKeyValueColon(body, "choices") < 0)
+                        return ProviderTestResult.Fail(ms, "answered, but not like an OpenAI-compatible chat server: " + Truncate(body));
+                    if (ExtractJsonString(body, "finish_reason") == "length")
+                        return ProviderTestResult.Fail(ms, "used its whole " + maxTokens + "-token budget without answering"
+                            + (reasoning > 0 ? " (" + reasoning + " tokens went to reasoning). It's a reasoning model: raise this layer's MaxOutputTokens in the mod's config file, or pick a non-reasoning model" : ""), reasoning, maxTokens);
+                    return ProviderTestResult.Fail(ms, "replied with no content: " + Truncate(body), reasoning, maxTokens);
+                }
+            }
+            catch (TaskCanceledException)
+            {
+                return ProviderTestResult.Fail(clock.ElapsedMilliseconds, "no answer within " + (timeoutMs / 1000) + " s");
+            }
+            catch (HttpRequestException e)
+            {
+                string inner = e.InnerException != null ? e.InnerException.Message : null;
+                return ProviderTestResult.Fail(clock.ElapsedMilliseconds, "unreachable: " + e.Message
+                    + (inner != null && !e.Message.Contains(inner) ? " (" + inner + ")" : ""));
+            }
+            catch (Exception e)
+            {
+                // e.g. a URL without http:// (UriFormatException / InvalidOperationException from HttpClient).
+                return ProviderTestResult.Fail(clock.ElapsedMilliseconds, e.GetType().Name + ": " + e.Message);
+            }
+            finally
+            {
+                SendGate.Release();
+            }
+        }
+
         /// <summary>Shared /v1/chat/completions transport for ALL layers (Spec §7.1–§7.4): single-flight gate,
         /// per-request timeout, one retry on transport failure, both-sides-of-the-wire error logging.</summary>
         private async Task<T> SendChatCompletionAsync<T>(string baseUrl, string json, Func<string, T> parser)

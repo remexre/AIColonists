@@ -227,6 +227,24 @@ namespace Verse
         public static bool ButtonText(UnityEngine.Rect rect, string label) => false;
     }
 
+    // [CONFIRMED 2026-11-22] Verse.Window / WindowStack: compile-checked against the real 1.7.5014 Assembly-CSharp.dll
+    // (Dialog_ProviderTest builds against it). Only the members the mod touches are stubbed.
+    public abstract class Window
+    {
+        public bool doCloseButton;
+        public bool doCloseX;
+        public bool absorbInputAroundWindow;
+        public bool closeOnClickedOutside;
+        public virtual UnityEngine.Vector2 InitialSize => new UnityEngine.Vector2(500f, 500f);
+        public abstract void DoWindowContents(UnityEngine.Rect inRect);
+    }
+
+    public class WindowStack
+    {
+        public readonly List<Window> Windows = new List<Window>(); // harness inspection only
+        public void Add(Window window) => Windows.Add(window);
+    }
+
     // --- time / world access ------------------------------------------------------
     // [CONFIRMED] Find.TickManager.Paused and .TicksGame are standard.
     public class TickManager { public bool Paused; public int TicksGame; }
@@ -235,6 +253,7 @@ namespace Verse
     {
         public static RimWorld.Planet.World World = new RimWorld.Planet.World(); // [CONFIRMED] 1.6: World moved to RimWorld.Planet
         public static TickManager TickManager = new TickManager();
+        public static WindowStack WindowStack = new WindowStack(); // [CONFIRMED 2026-11-22 against 1.7] Find.WindowStack
         // [CONFIRMED decompiled 2026-11-15] 1.6 Find has NO FactionPlayer member — the player faction is
         // RimWorld.Faction.OfPlayer (see MapPawns.FreeColonists => FreeHumanlikesOfFaction(Faction.OfPlayer)).
         // [CONFIRMED decompiled 2026-11-15] 1.6 Find.CurrentMap property → Verse.Map (null in world view). Stub: field, default null.

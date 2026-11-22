@@ -28,6 +28,31 @@ namespace AIColonists.Inference
         Task<bool> WarmUpAsync();
     }
 
+    /// <summary>Outcome of one "Test providers" probe (LlamaServerClient.TestProviderAsync). Immutable, so the settings
+    /// dialog can read it from the UI thread while the probe runs on a worker thread.</summary>
+    public sealed class ProviderTestResult
+    {
+        public readonly bool ok;
+        public readonly long latencyMs;
+        public readonly string message;      // the model's reply when ok, otherwise what went wrong
+        public readonly int reasoningTokens; // tokens the model spent thinking (0 = none, or not reported)
+        public readonly int maxTokens;       // the output budget the probe ran with (0 = unknown)
+
+        private ProviderTestResult(bool ok, long latencyMs, string message, int reasoningTokens, int maxTokens)
+        {
+            this.ok = ok;
+            this.latencyMs = latencyMs;
+            this.message = message ?? "";
+            this.reasoningTokens = reasoningTokens;
+            this.maxTokens = maxTokens;
+        }
+
+        public static ProviderTestResult Ok(long latencyMs, string reply, int reasoningTokens = 0, int maxTokens = 0) =>
+            new ProviderTestResult(true, latencyMs, reply, reasoningTokens, maxTokens);
+        public static ProviderTestResult Fail(long latencyMs, string error, int reasoningTokens = 0, int maxTokens = 0) =>
+            new ProviderTestResult(false, latencyMs, error, reasoningTokens, maxTokens);
+    }
+
     /// <summary>Everything a Layer 1 call needs, captured on the main thread (Spec §5.1 / §7.1).</summary>
     public class Layer1Request
     {

@@ -154,6 +154,10 @@ namespace AIColonists.Core
                     VramPresets.Apply(p, s); // harness-pinned: models + timeout only, never URLs
                 bx += 214f;
             }
+
+            // Right end of the preset row: the dialog has no spare vertical room (see above), so results open in a popup.
+            if (Widgets.ButtonText(new Rect(r.x + r.width - 190f, y, 180f, 30f), "Test providers"))
+                Find.WindowStack.Add(new UI.Dialog_ProviderTest(s));
             y += 38f;
 
             Text.Font = GameFont.Tiny;
