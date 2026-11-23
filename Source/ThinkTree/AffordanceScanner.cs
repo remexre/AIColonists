@@ -222,7 +222,7 @@ namespace AIColonists.ThinkTree
             foreach (Pawn other in pawn.Map.mapPawns.AllPawnsSpawned) // friendly colonists only (Faction.IsPlayer gate below)
             {
                 if (other == pawn || options.Count >= MaxOptions) continue;
-                if (!other.RaceProps.Humanlike || !other.Faction.IsPlayer) continue;
+                if (!other.RaceProps.Humanlike || other.Faction == null || !other.Faction.IsPlayer) continue;
                 // 1.6 verified: IntVec3.LengthIntApprox is gone — LengthHorizontal (float, Euclidean XZ) is the replacement.
                 if ((other.Position - pawn.Position).LengthHorizontal > 15f) continue;
                 if (!GenSight.LineOfSight(pawn.Position, other.Position, pawn.Map)) continue;

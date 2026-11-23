@@ -46,9 +46,13 @@ namespace AIColonists.UI
             tutorTag = "AIMind";
         }
 
-        /// <summary>Visible only on player-faction humanlike pawns while AI is enabled (Spec §9 Phase 4).</summary>
+        /// <summary>Visible only on player-faction humanlike pawns while AI is enabled (Spec §9 Phase 4). Babies are hidden:
+        /// they get no LLM layers, so the tab would only ever say "no data yet".
+        /// 2026-11-22 (live NRE every OnGUI frame): Faction is null for factionless pawns — wild men, and the corpses SelPawn
+        /// looks into — so it is null-checked before IsPlayer.</summary>
         public override bool IsVisible =>
-            SelPawn != null && SelPawn.Faction.IsPlayer && SelPawn.RaceProps.Humanlike
+            SelPawn != null && SelPawn.Faction != null && SelPawn.Faction.IsPlayer && SelPawn.RaceProps.Humanlike
+            && !AIColonists.Prompts.PawnText.IsBaby(SelPawn)
             && AIColonistMod.Settings != null && AIColonistMod.Settings.EnableAI;
 
         protected override void UpdateSize()

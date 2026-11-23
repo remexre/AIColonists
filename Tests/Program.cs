@@ -1020,6 +1020,13 @@ namespace AIColonists.Tests
             Check(!sys.Contains("<") && !usr.Contains("<color") && !usr.Contains("Forester") && !usr.Contains("Newborn"),
                 "no rich-text markup or short titles anywhere in the Layer 1 prompt");
             Check(usr.Contains("- Albina.") && usr.Contains("Go talk to Albina."), "nearby + social option use the short name");
+            var wildMan = MakePawn("pp4", map);
+            wildMan.LabelCap = "Wild man"; wildMan.Faction = null; wildMan.Position = new IntVec3(1, 0); // factionless (live NRE 2026-11-22)
+            List<AffordanceOption> withWild = null;
+            try { withWild = AffordanceScanner.Scan(paulo); } catch (NullReferenceException) { }
+            Check(withWild != null && withWild.Any(o => o.sensoryDescription == "Go talk to Albina.") && !withWild.Any(o => o.sensoryDescription.Contains("Wild man")),
+                "factionless pawn nearby: scan survives, never offered as a colonist to talk to");
+            wildMan.Position = new IntVec3(500, 500); // out of the way for the checks below
 
             // Backstories: the game's own prose, without the skill/work-disable tail, tags stripped.
             Check(sys.Contains("## YOUR PAST\nGrowing up: Paulo grew up on a glitterworld and hated it.\nSince then: Paulo and his crew of misfits found the fountain of youth. There's even a religion about them."),
@@ -1405,6 +1412,18 @@ namespace AIColonists.Tests
             enemy.Faction = new Faction { IsPlayer = false };
             tab.SelPawn = enemy;
             Check(!tab.IsVisible, "hidden for non-player-faction pawns");
+
+            var wild = MakePawn("tw");
+            wild.Faction = null; // wild men, factionless refugees, and their corpses (live NRE 2026-11-22)
+            tab.SelPawn = wild;
+            bool wildVisible = true;
+            try { wildVisible = tab.IsVisible; } catch (NullReferenceException) { }
+            Check(!wildVisible, "factionless pawn: hidden, no NullReferenceException");
+
+            var baby = MakePawn("tb");
+            baby.DevelopmentalStage = DevelopmentalStage.Baby;
+            tab.SelPawn = baby;
+            Check(!tab.IsVisible, "hidden for babies (no LLM layers run for them)");
 
             tab.SelPawn = null;
             Check(!tab.IsVisible, "hidden when no pawn selected");
