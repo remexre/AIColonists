@@ -27,6 +27,7 @@ namespace AIColonists.ThinkTree
             if (pawn.Faction != RimWorld.Faction.OfPlayer || pawn.IsPrisoner) return false;
 
             if (!pawn.RaceProps.Humanlike) return false;
+            if (AIColonists.Prompts.PawnText.IsBaby(pawn)) return false; // newborns/babies: vanilla only (live 2026-11-22)
 
             return !pawn.Drafted && !pawn.InMentalState;
         }

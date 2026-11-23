@@ -3,31 +3,28 @@ using Verse;
 namespace AIColonists.Core
 {
     /// <summary>
-    /// Mood → Sampling Entropy mapper (Spec §3.2). Decouples cognitive depth (Intellect) from entropy (Mood):
-    /// mood drives temperature inside [0.50, 0.85] + top_p; min_p stays fixed at 0.08 to clip garbage tail tokens.
-    /// Small models collapse above ~1.0 temperature — hard-clamped here no matter what the table says.
+    /// Mood → Sampling Entropy mapper (Spec §3.2). Decouples cognitive depth (Intellect) from entropy (Mood): mood nudges
+    /// Layer 1's temperature up or down from the player's base temperature.
+    /// 2026-11-22: the offset is now RELATIVE to the base, clamped only to the API's legal range. It used to be hard-clamped
+    /// to [0.50, 0.85] (tuned for 1.5B-14B local models), which silently capped any base temperature the player set
+    /// above ~0.8; hosted models like Inkling are benchmarked at 1.0. At the old default base 0.65 the results match the
+    /// old band (0.50-0.85). top_p is no longer mood-mapped: min_p already trims the tail, and stacking both cuts variety.
     /// </summary>
     public static class MoodEntropyMapper
     {
-        public const float TempFloor = 0.50f;
-        public const float TempCeiling = 0.85f;
+        public const float MinTemperature = 0f;
+        public const float MaxTemperature = 2f; // OpenAI-compatible APIs reject anything above 2
 
-        public struct MoodParams
+        // Spec §3.2 MOOD_ENTROPY_MAP, keyed by mood tier: temperature offsets from the base.
+        private static readonly System.Collections.Generic.Dictionary<string, float> Table =
+            new System.Collections.Generic.Dictionary<string, float>
         {
-            public float tempOffset;
-            public float topP;
-        }
-
-        // Spec §3.2 MOOD_ENTROPY_MAP, keyed by mood tier.
-        private static readonly System.Collections.Generic.Dictionary<string, MoodParams> Table =
-            new System.Collections.Generic.Dictionary<string, MoodParams>
-        {
-            { "ecstatic",   new MoodParams { tempOffset = +0.05f, topP = 0.92f } },
-            { "happy",      new MoodParams { tempOffset =  0.00f, topP = 0.90f } },
-            { "content",    new MoodParams { tempOffset = -0.05f, topP = 0.85f } }, // predictable, steady routine
-            { "stressed",   new MoodParams { tempOffset = +0.10f, topP = 0.92f } }, // slightly erratic
-            { "furious",    new MoodParams { tempOffset = +0.20f, topP = 0.95f } }, // impulsive, sharp (max 0.85 after clamp)
-            { "depressed",  new MoodParams { tempOffset = -0.15f, topP = 0.80f } }, // flat, repetitive, low-energy (min 0.50 after clamp)
+            { "ecstatic",  +0.05f },
+            { "happy",      0.00f },
+            { "content",   -0.05f }, // predictable, steady routine
+            { "stressed",  +0.10f }, // slightly erratic
+            { "furious",   +0.20f }, // impulsive, sharp
+            { "depressed", -0.15f }, // flat, repetitive, low-energy
         };
 
         /// <summary>
@@ -56,34 +53,25 @@ namespace AIColonists.Core
             catch { return "content"; } // defensive rule — a throwing mood read must never break the caller
         }
 
-        private static MoodParams ParamsFor(string tier)
+        private static float OffsetFor(string tier)
         {
-            MoodParams p;
-            if (!Table.TryGetValue(tier, out p))
-                p = Table["content"]; // defensive — every tier key the mappers emit is in the table
-            return p;
+            float o;
+            if (!Table.TryGetValue(tier, out o))
+                o = Table["content"]; // defensive — every tier key the mappers emit is in the table
+            return o;
         }
 
         /// <summary>Background-thread path (Phase 2): the dispatch worker only sees the snapshot, so it passes the
-        /// mood percentage captured on the main thread. Clamped to [TempFloor, TempCeiling] per Spec §3.2.</summary>
-        public static float MoodToTemperature(float baseTemp, float moodPct)
-        {
-            float t = baseTemp + ParamsFor(MoodTier(moodPct)).tempOffset;
-            return UnityEngine.Mathf.Clamp(t, TempFloor, TempCeiling);
-        }
+        /// mood percentage captured on the main thread.</summary>
+        public static float MoodToTemperature(float baseTemp, float moodPct) =>
+            UnityEngine.Mathf.Clamp(baseTemp + OffsetFor(MoodTier(moodPct)), MinTemperature, MaxTemperature);
 
         /// <summary>Legacy main-thread overload (kept for the harness and any future pawn-side callers). A null pawn is an
-        /// UNKNOWN mood — the content baseline applies, exactly as pre-Phase 2 (the "content" tier offset, then clamp).</summary>
+        /// UNKNOWN mood — the content baseline applies.</summary>
         public static float MoodToTemperature(float baseTemp, Pawn pawn = null)
         {
             string tier = pawn == null ? "content" : MoodTier(pawn);
-            return UnityEngine.Mathf.Clamp(baseTemp + ParamsFor(tier).tempOffset, TempFloor, TempCeiling);
+            return UnityEngine.Mathf.Clamp(baseTemp + OffsetFor(tier), MinTemperature, MaxTemperature);
         }
-
-        /// <summary>Background-thread path: mood-mapped top_p (Spec §3.2 MOOD_ENTROPY_MAP).</summary>
-        public static float MoodToTopP(float moodPct) => ParamsFor(MoodTier(moodPct)).topP;
-
-        /// <summary>Legacy main-thread overload (kept for the harness and any future pawn-side callers).</summary>
-        public static float MoodToTopP(Pawn pawn = null) => ParamsFor(pawn == null ? "content" : MoodTier(pawn)).topP;
     }
 }

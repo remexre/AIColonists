@@ -22,7 +22,12 @@ namespace AIColonists.Prompts
         // --- Phase 2: static identity zone (Spec §7.1) — changes only on Layer 3 consolidation / rare events, so it stays KV-cached ---
         public int AgeYears;                  // -1 = unknown (half-loaded pawn)
         public string ColonyName;             // "" = unknown (no map parent)
-        public string TraitsLine;             // "Your nature runs stoic (deeply); quick-tempered (clearly)." or ""
+        public List<string> RecentThoughts;   // the pawn's last Layer 1 inner_voice lines, oldest first (anti-repeat); set by EnqueueAsyncLayer1
+        public string Title;                  // full backstory title, lower case ("dreaded dude"), or ""
+        public string ChildhoodStory;         // the game's own backstory prose (PawnText.Story), or ""
+        public string AdulthoodStory;         // the game's own backstory prose, or "" (children have none)
+        public List<string> VoiceLines;       // how their traits sound in their head (PawnText.VoiceFor), ≤3
+        public string TraitsLine;             // "Others would describe you as abrasive, pessimist and night owl." or ""
         public string SkillsLine;             // "You are known around here for your mining and cooking." or ""
         public int IntellectualLevel;         // SkillDefOf.Intellectual level — cadence + colony-horizon gating (Spec §3.2); -1 = unknown
         public List<string> SemanticMemoryLines;   // ≤3 distilled self-knowledge lines from the mind state
@@ -52,7 +57,7 @@ namespace AIColonists.Prompts
             var snap = new SensorySnapshot
             {
                 PawnId = pawn.ThingID,
-                PawnName = SafeLabel(pawn), // may be null (save-load) — log line falls back to the ID
+                PawnName = PawnText.ShortName(pawn), // prompt name + log label; may be null (save-load) — falls back to the ID
                 CaptureTick = Find.TickManager.TicksGame,
                 Affordances = affordances,
                 BodyAndSurroundingsLines = FrameBody(pawn),
@@ -101,8 +106,15 @@ namespace AIColonists.Prompts
             catch { }
             snap.ColonyName = colony;
 
-            // Traits → nature line + continuous weight seeding source.
+            // Title + the game's own backstory prose (2026-11-22: neither reached the prompt before, so every pawn sounded
+            // the same). Static per pawn, so it stays in the KV-cached prefix.
+            snap.Title = PawnText.Title(pawn);
+            snap.ChildhoodStory = PawnText.Story(pawn.story?.Childhood, pawn);
+            snap.AdulthoodStory = PawnText.Story(pawn.story?.Adulthood, pawn);
+
+            // Traits → plain trait list + voice lines (how each trait sounds in their head).
             string traitsLine = "";
+            var voices = new List<string>();
             try
             {
                 // [CONFIRMED decompiled 2026-11-15] 1.6: the TraitSet lives on the story tracker — pawn.story.traits.allTraits.
@@ -113,14 +125,18 @@ namespace AIColonists.Prompts
                     foreach (Trait t in all)
                     {
                         if (t == null || t.Suppressed) continue;
-                        parts.Add(DescriptorFor(t.LabelCap, t.Degree));
+                        // Spectrum traits already name their degree ("pessimist", "iron-willed") — no strength adverb needed.
+                        parts.Add(((string)t.LabelCap ?? "").ToLowerInvariant());
+                        string voice = t.def != null ? PawnText.VoiceFor(t.def.defName, t.Degree) : null;
+                        if (voice != null && voices.Count < 3) voices.Add(voice);
                         if (parts.Count >= 4) break; // keep the prefix short — KV cache is the point
                     }
-                    if (parts.Count > 0) traitsLine = "Your nature runs " + string.Join("; ", parts) + ".";
+                    if (parts.Count > 0) traitsLine = "Others would describe you as " + JoinAnd(parts) + ".";
                 }
             }
             catch { }
             snap.TraitsLine = traitsLine;
+            snap.VoiceLines = voices;
 
             // Top skills → one stable line (names only, NOT levels — level-ups must not churn the cached prefix).
             string skillsLine = "";
@@ -180,11 +196,12 @@ namespace AIColonists.Prompts
                 if (sorted[i].Value <= 0.35f) aversions.Add(sorted[i].Key);
         }
 
-        private static string DescriptorFor(string traitLabel, int degree)
+        /// <summary>"a", "a and b", "a, b and c".</summary>
+        public static string JoinAnd(List<string> parts)
         {
-            int mag = Math.Abs(degree);
-            string strength = mag >= 2 ? "deeply" : (mag == 1 ? "clearly" : "mildly");
-            return traitLabel.ToLower() + " (" + strength + ")";
+            if (parts == null || parts.Count == 0) return "";
+            if (parts.Count == 1) return parts[0];
+            return string.Join(", ", parts.GetRange(0, parts.Count - 1)) + " and " + parts[parts.Count - 1];
         }
 
         private static int EpisodicLineCount(int intellect)
@@ -219,8 +236,9 @@ namespace AIColonists.Prompts
                 if (other == pawn || !other.RaceProps.Humanlike || other.Faction != Faction.OfPlayer) continue;
                 if ((other.Position - pawn.Position).LengthHorizontal > 10f) continue;
 
-                string name = SafeLabel(other);
+                string name = PawnText.ShortName(other);
                 if (string.IsNullOrEmpty(name)) continue;
+                if (PawnText.IsBaby(other)) { lines.Add(name + " (a baby)."); continue; } // present, but not someone to talk with
 
                 string color = "";
                 // READ-ONLY lookup — GetOrCreateRelationship would plant a fresh (default-valued) vector as a side effect.
@@ -273,7 +291,7 @@ namespace AIColonists.Prompts
                         if (string.IsNullOrEmpty(label)) continue;
 
                         string who = "";
-                        try { if (m.otherPawn != null && m.otherPawn != pawn) who = " about " + SafeLabel(m.otherPawn); } catch { }
+                        try { if (m.otherPawn != null && m.otherPawn != pawn) who = " about " + PawnText.ShortName(m.otherPawn); } catch { }
                         lines.Add("You're still bothered" + who + " — " + label.ToLower() + ".");
                         added++;
                     }

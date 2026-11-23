@@ -38,9 +38,14 @@ namespace AIColonists.Core
         public int Layer3MinGameTicks = 18000;     // ~5 min per colonist (staggered)
         public float Layer3MinRealSeconds = 300f;
 
-        // Sampling guardrails (Spec §3.2): Mood maps to temperature inside [0.50, 0.85]; min_p clips garbage tails.
-        public float BaseTemperature = 0.65f;
-        public float MinP = 0.08f;
+        // Sampling (Spec §3.2): Layer 1 adds a mood offset (-0.15..+0.20) to the base; Layer 2 uses the base as is;
+        // min_p clips garbage tails. 2026-11-22: defaults raised from 0.65 / 0.08 to 1.0 / 0.05 — Thinking Machines
+        // benchmarks Inkling at temperature 1.0, Unsloth's Inkling guide uses 1.0 with top_p off, and live Inkling 2 mini
+        // samples at 0.65 all opened with the same words. min_p keeps the tail clipped, so small local models stay coherent.
+        public float BaseTemperature = 1.0f;
+        public float MinP = 0.05f;
+        // Layer 3 writes long-term memories that stay in the pawn's prompt permanently, so one odd sample sticks: run cooler.
+        public float Layer3Temperature = 0.5f;
 
         // Output token budgets (Spec §3.1).
         public int Layer1MaxOutputTokens = 80;
@@ -63,6 +68,7 @@ namespace AIColonists.Core
             var d = new Settings();
             BaseTemperature = d.BaseTemperature;
             MinP = d.MinP;
+            Layer3Temperature = d.Layer3Temperature;
             Layer1MaxOutputTokens = d.Layer1MaxOutputTokens;
             Layer2MaxOutputTokens = d.Layer2MaxOutputTokens;
             Layer3MaxOutputTokens = d.Layer3MaxOutputTokens;
@@ -90,8 +96,9 @@ namespace AIColonists.Core
             Scribe_Values.Look(ref Layer2MinRealSeconds, "layer2MinRealSeconds", 90f);
             Scribe_Values.Look(ref Layer3MinGameTicks, "layer3MinGameTicks", 18000);
             Scribe_Values.Look(ref Layer3MinRealSeconds, "layer3MinRealSeconds", 300f);
-            Scribe_Values.Look(ref BaseTemperature, "baseTemperature", 0.65f);
-            Scribe_Values.Look(ref MinP, "minP", 0.08f);
+            Scribe_Values.Look(ref BaseTemperature, "baseTemperature", 1.0f);
+            Scribe_Values.Look(ref MinP, "minP", 0.05f);
+            Scribe_Values.Look(ref Layer3Temperature, "layer3Temperature", 0.5f);
             Scribe_Values.Look(ref Layer1MaxOutputTokens, "layer1MaxOutputTokens", 80);
             Scribe_Values.Look(ref Layer2MaxOutputTokens, "layer2MaxOutputTokens", 150);
             Scribe_Values.Look(ref Layer3MaxOutputTokens, "layer3MaxOutputTokens", 350);

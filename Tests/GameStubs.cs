@@ -450,7 +450,12 @@ namespace Verse
         // can simulate the load-time throw (the real property would throw from inside).
         private string labelCapInt = "StubColonist";
         public virtual string LabelCap { get { return labelCapInt; } set { labelCapInt = value; } }
-        public string LabelShort => LabelCap; // real game: first name only; the stub keeps them in lockstep
+        // [CONFIRMED 1.7] real LabelShort = Name.ToStringShort ("Paulo"); LabelCap = "Paulo<color=#999999FF>, Dude</color>".
+        // Stub: settable; defaults to LabelCap so older tests that only set LabelCap keep working.
+        private string labelShortInt;
+        public string LabelShort { get { return labelShortInt ?? LabelCap; } set { labelShortInt = value; } }
+        // [CONFIRMED decompiled 1.7] Pawn.DevelopmentalStage + Verse.DevelopmentalStageExtensions.Newborn()/Baby().
+        public DevelopmentalStage DevelopmentalStage = DevelopmentalStage.Adult;
         public Map Map;
         // [CONFIRMED] 1.6: Pawn.Spawned / Thing.DrawPos / Thing.MapHeld — all used by decompiled MoteMaker
         // (pawn.DrawPos, thing.MapHeld); motes can only anchor to spawned pawns.
@@ -475,6 +480,15 @@ namespace Verse
         // [CONFIRMED] 1.6: pawn.interactions is a PUBLIC FIELD of type RimWorld.Pawn_InteractionsTracker (reflection probe).
         // Left null on purpose — tests assign it explicitly, which also exercises the mod's null guard.
         public RimWorld.Pawn_InteractionsTracker interactions;
+    }
+
+    // [CONFIRMED decompiled 1.7] Verse.DevelopmentalStage flags + extension predicates.
+    [Flags]
+    public enum DevelopmentalStage { None = 0, Newborn = 1, Baby = 2, Child = 4, Adult = 8 }
+    public static class DevelopmentalStageExtensions
+    {
+        public static bool Newborn(this DevelopmentalStage s) => (s & DevelopmentalStage.Newborn) != 0;
+        public static bool Baby(this DevelopmentalStage s) => (s & DevelopmentalStage.Baby) != 0;
     }
 
     // --- maps / components --------------------------------------------------------------------
@@ -698,12 +712,29 @@ namespace RimWorld
 
     // [CONFIRMED decompiled 2026-11-15] 1.6: TraitSet.allTraits is a PUBLIC List<Trait> FIELD; Trait exposes LabelCap
     // (computed), Degree (int) and Suppressed (bool) — the identity-prefix trait line + weight-seeding source.
-    public class Trait { public string LabelCap = "stub trait"; public int Degree; public bool Suppressed; }
+    public class Trait { public string LabelCap = "stub trait"; public int Degree; public bool Suppressed; public TraitDef def; }
+    // [CONFIRMED] Trait.def (TraitDef) with defName — keys the voice table (vanilla defNames read from the 1.7 TraitDefs XML).
+    public class TraitDef { public string defName = ""; }
+    // [CONFIRMED decompiled 1.7] BackstoryDef.FullDescriptionFor(Pawn) → TaggedString: resolved prose, then a blank line,
+    // then skill/work-disable lines. Stub returns `fullDescription` verbatim so tests can include that tail.
+    public class BackstoryDef
+    {
+        public string description = ""; // [CONFIRMED] Def.description: raw prose with [PAWN_*] tokens
+        public string fullDescription = "";
+        public string FullDescriptionFor(Verse.Pawn p) => fullDescription;
+    }
     public class TraitSet { public List<Trait> allTraits = new List<Trait>(); }
 
     // [CONFIRMED decompiled 2026-11-15] 1.6: the TraitSet lives on the STORY TRACKER — `public TraitSet traits` field on
     // RimWorld.Pawn_StoryTracker (Verse.Pawn has NO direct traits field; vanilla code reads story?.traits.allTraits).
-    public class Pawn_StoryTracker { public TraitSet traits = new TraitSet(); }
+    // [CONFIRMED decompiled 1.7] Childhood/Adulthood (BackstoryDef) + TitleCap (custom title, else adulthood/childhood title).
+    public class Pawn_StoryTracker
+    {
+        public TraitSet traits = new TraitSet();
+        public BackstoryDef Childhood;
+        public BackstoryDef Adulthood;
+        public string TitleCap = "";
+    }
 
     // [CONFIRMED decompiled 2026-11-15] 1.6: Pawn_SkillTracker.skills is a PUBLIC List<SkillRecord> FIELD + GetSkill(SkillDef);
     // SkillRecord carries public def (SkillDef) + levelInt (int). SkillDefOf fields include Intellectual (the learning-system

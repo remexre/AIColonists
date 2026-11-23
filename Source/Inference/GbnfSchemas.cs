@@ -23,7 +23,7 @@ namespace AIColonists.Inference
     },
     ""inner_voice"": {
       ""type"": ""string"",
-      ""description"": ""First-person internal sensation and thought, 1-2 sentences, zero mechanical terms.""
+      ""description"": ""First-person thought in your own plain voice: one or two short sentences, under 30 words, zero mechanical terms.""
     },
     ""spoken_mutter"": {
       ""type"": ""string"",

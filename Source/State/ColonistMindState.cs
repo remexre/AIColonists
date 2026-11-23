@@ -44,8 +44,7 @@ namespace AIColonists.State
             // so Pawn.Label falls back to KindLabel → GenLabel.BestKindLabel, which derefs kind/race defs still NULL at that point.
             // Leave the name empty rather than store garbage — AIColonistWorldComponent.GetOrCreateMindState self-heals it on a
             // later tick once the pawn is fully loaded (pawnName is only consumed by the Layer 3 system prompt).
-            try { pawnName = pawn.LabelCap; }
-            catch { pawnName = ""; }
+            pawnName = AIColonists.Prompts.PawnText.ShortName(pawn) ?? ""; // never LabelCap (title + color tags)
 
             // TODO(Phase 2): seed traitWeights from pawn.story.traits (e.g., Stoic → "stoic": 0.8, Jumpy → "anxious": 0.7)
             //   and pull backstory lines from pawn.story.bio for the identity prefix (Spec §4.1 layer 1).

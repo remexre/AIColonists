@@ -231,8 +231,8 @@ namespace AIColonists.ThinkTree
                 // model conflated the colonist named Cook with the act of cooking in its inner voices. Names are names; the
                 // system prompt now says so explicitly too. LabelCap can throw on half-loaded pawns (ErrorOnce 4814 precedent) —
                 // a throwing label skips the candidate instead of killing the scan.
-                string name;
-                try { name = other.LabelCap; } catch { continue; }
+                if (PawnText.IsBaby(other)) continue; // babies aren't conversation partners (live 2026-11-22)
+                string name = PawnText.ShortName(other); // NOT LabelCap: that carries the backstory title + color tags
                 if (string.IsNullOrEmpty(name)) continue;
 
                 string color = "";
@@ -298,8 +298,7 @@ namespace AIColonists.ThinkTree
             }
 
             // LabelCap can throw on half-loaded pawns (ErrorOnce 4814 precedent) — unnamed phrasing instead of a dead scan.
-            string name = null;
-            try { name = target.LabelCap; } catch { /* unnamed phrasing below */ }
+            string name = PawnText.ShortName(target); // null on half-loaded pawns → unnamed phrasing below
             bool named = !string.IsNullOrEmpty(name);
 
             // Doctor

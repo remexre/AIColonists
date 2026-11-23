@@ -13,8 +13,7 @@ namespace AIColonists.Prompts
     public static class Layer2PromptBuilder
     {
         // Spec §7.3 — system message = static prefix zone. Never varies between calls: that is what makes the KV cache hit.
-        private const string SystemTemplate = @"# ROLE (STATIC PREFIX - KV CACHED)
-You are the social fabric of a small group of people sharing one room or outdoor space.
+        private const string SystemTemplate = @"You are the social fabric of a small group of people sharing one room or outdoor space.
 Describe only what they would plausibly do and say RIGHT NOW, as physical reality. You have no concept of games, stats, or simulations.
 
 ## RULES
@@ -27,9 +26,10 @@ Describe only what they would plausibly do and say RIGHT NOW, as physical realit
   - quiet_nod: a small silent acknowledgment (no words)
   - avoid_gaze: deliberately looking away / giving space (no words)
   - none: does nothing social this moment
-- spoken_line is what they say ALOUD, in their own voice, at most 10 words. Empty string for quiet_nod, avoid_gaze and none.
+- spoken_line is what they say ALOUD, at most 10 words, in plain everyday speech that fits who they are (their background is in parentheses). No poetic phrasing. Empty string for quiet_nod, avoid_gaze and none.
 - inner_feeling is one short first-person sentence about why the acting person feels like this (empty string when none).
-- target_name must be ANOTHER colonist's roster name exactly as given — NEVER the acting colonist's own name (no one can socially act toward themselves); empty string when social_impulse is none.
+- colonist_name and target_name are the name BEFORE the parentheses, exactly as given (""Paulo"", not ""Paulo (dreaded dude)"").
+- target_name must be ANOTHER colonist's roster name — NEVER the acting colonist's own name (no one can socially act toward themselves); empty string when social_impulse is none.
 - Never invent people who are not in the room. Never mention stats, numbers, moods as percentages, or anything mechanical.";
 
         /// <summary>The static system zone — byte-identical for every Layer 2 call (KV-cache hot).</summary>
@@ -44,7 +44,14 @@ Describe only what they would plausibly do and say RIGHT NOW, as physical realit
             {
                 if (pawn == null || pawn.needs == null) continue;
 
-                sb.Append("- ").Append(pawn.LabelCap).Append(": ");
+                // Short name + full title in parentheses (2026-11-22): LabelCap ("Paulo<color>, Dude</color>") put markup in the
+                // roster and read as two people. FindColonistByName matches LabelShort, so the replies still resolve.
+                string name = PawnText.ShortName(pawn);
+                if (string.IsNullOrEmpty(name)) continue;
+                string title = PawnText.Title(pawn);
+                sb.Append("- ").Append(name);
+                if (!string.IsNullOrEmpty(title)) sb.Append(" (").Append(title).Append(')');
+                sb.Append(": ");
                 AppendNeedProse(sb, pawn);
 
                 string note;

@@ -29,7 +29,7 @@ namespace AIColonists.Core
             // our systems touch every pawn constantly on normal ticks, so the real name lands on the next call.
             if (string.IsNullOrEmpty(ms.pawnName))
             {
-                try { ms.pawnName = pawn.LabelCap; } catch { /* still loading — retry on a later tick */ }
+                ms.pawnName = AIColonists.Prompts.PawnText.ShortName(pawn) ?? ""; // null while still loading — retry on a later tick
             }
 
             return ms;

@@ -30,6 +30,7 @@ namespace AIColonists.Core
             foreach (Pawn pawn in map.mapPawns.FreeColonistsSpawned)
             {
                 if (pawn.Drafted || pawn.InMentalState) continue; // Spec §3.4: only decide for pawns that need to
+                if (AIColonists.Prompts.PawnText.IsBaby(pawn)) continue; // babies don't take part in room social (2026-11-22)
 
                 string key;
                 // 1.6 verified: Pawn has no room accessor — RegionAndRoomQuery.GetRoom(Thing, RegionType) is the
@@ -109,8 +110,8 @@ namespace AIColonists.Core
             var req = new Layer2Request();
             req.model = s != null ? s.Layer2Model : "qwen2.5-1.5b-instruct-q4_k_m"; // ignored by single-model servers (live-verified)
             req.systemPrompt = Layer2PromptBuilder.BuildSystemPrompt();
-            req.temperature = s != null ? s.BaseTemperature : 0.65f;
-            req.minP = s != null ? s.MinP : 0.08f;
+            req.temperature = s != null ? s.BaseTemperature : 1.0f;
+            req.minP = s != null ? s.MinP : 0.05f;
             req.maxTokens = s != null ? s.Layer2MaxOutputTokens : 150;
             req.disableReasoning = s != null && s.DisableReasoning;
 

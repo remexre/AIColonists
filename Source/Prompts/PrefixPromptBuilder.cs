@@ -13,27 +13,32 @@ namespace AIColonists.Prompts
     public static class PrefixPromptBuilder
     {
         // Spec §7.1 — system message = static prefix zone. [Brackets] are placeholders.
-        private const string SystemTemplate = @"# IDENTITY (STATIC PREFIX - KV CACHED)
-You are [Name], age [Age], living in the settlement of [ColonyName].
-You experience this world as physical reality. You have no concept of games, stats, or simulations.
-Names in your options are people's names, never occupations or actions (Cook is a person, not cooking).
+        // 2026-11-22 persona rework (live review of Inkling 2 mini outputs): every pawn spoke in the same gentle, literary,
+        // therapy-flavored voice, ignored the length rule, and titles leaked in as fake people. The prefix now carries the
+        // game's own backstory prose, the full title, per-trait voice lines and an explicit plain-speech rule. Engineering
+        // labels ("STATIC PREFIX - KV CACHED") are gone from the text the model reads; the static/dynamic split is unchanged.
+        private const string SystemTemplate = @"You are [Name], [Age].[TitleClause] You live in the settlement of [ColonyName].
+This is your real life. You know nothing of games, stats, or simulations.
+
+## YOUR PAST
+[StoryLines]
 
 ## WHO YOU ARE
-[BackstoryAndCoreTraitSummary]
-Speech & Thought Cadence: [CadenceRuleFromIntellectAndTraits]
+[WhoLines]
 
-## WHAT YOU VALUE & FEAR
-- Values: [TopValues]
-- Dislikes: [TopAversions]
+## HOW YOU THINK AND TALK
+[VoiceLines]
+- [Cadence]
+- Your thought is one or two short sentences, under 30 words, in your own words: plain and specific, the way someone with your past really talks. No poetic or therapy-style language.
+[TemperamentBlock]
+## WHAT YOU'VE COME TO BELIEVE
+[MemoryLines]
 
-## LONG-TERM MEMORIES & HABITS
-[MemoryLines]";
+Capitalized names are people: someone called Cook is a person, not cooking.";
 
-        // Spec §7.1 — user message = dynamic suffix zone (evaluated per call).
-        private const string UserTemplate = @"# CURRENT EXPERIENCE (DYNAMIC SUFFIX)
-## RECENT EVENTS ON YOUR MIND
+        private const string UserTemplate = @"## ON YOUR MIND
 [EpisodicLines]
-
+[RecentThoughtsBlock]
 ## PEOPLE NEARBY
 [NearbyPawnLines]
 
@@ -41,50 +46,65 @@ Speech & Thought Cadence: [CadenceRuleFromIntellectAndTraits]
 [BodyAndSurroundingsLines]
 [IntellectGatedColonyHorizon]
 
-## POSSIBLE IMPULSES RIGHT NOW
+## WHAT YOU COULD DO RIGHT NOW
 [AffordanceList]
 
-Express your fleeting inner thought in first person, optional spoken mutter, and the number of the impulse you act on.";
+Give your fleeting inner thought[FreshClause], anything you mutter aloud, and the number of what you do.";
 
-        /// <summary>Static prefix zone — changes only during Layer 3 consolidation (every ~5 min) or rare identity events
-        /// (age birthday, skill name change), so it stays KV-cached between the ~30 s Layer 1 calls.</summary>
         public static string BuildSystemPrompt(SensorySnapshot snapshot)
         {
             string s = SystemTemplate;
 
-            // Identity — real per-pawn data captured on the main thread (Spec §7.1). Fallbacks keep a half-loaded pawn
-            // (save-load edge) producing a valid, if sparse, prefix instead of an exception.
             s = s.Replace("[Name]", string.IsNullOrEmpty(snapshot.PawnName) ? "a colonist" : snapshot.PawnName);
-            s = s.Replace("[Age]", snapshot.AgeYears > 0 ? snapshot.AgeYears.ToString() : "unknown");
+            s = s.Replace("[Age]", snapshot.AgeYears > 0 ? "age " + snapshot.AgeYears : "of uncertain age");
+            s = s.Replace("[TitleClause]", string.IsNullOrEmpty(snapshot.Title) ? "" : " People know you as " + PawnText.WithArticle(snapshot.Title) + ".");
             s = s.Replace("[ColonyName]", string.IsNullOrEmpty(snapshot.ColonyName) ? "your settlement" : snapshot.ColonyName);
+
+            var story = new StringBuilder();
+            if (!string.IsNullOrEmpty(snapshot.ChildhoodStory)) story.Append("Growing up: ").Append(snapshot.ChildhoodStory).Append('\n');
+            if (!string.IsNullOrEmpty(snapshot.AdulthoodStory)) story.Append("Since then: ").Append(snapshot.AdulthoodStory).Append('\n');
+            s = s.Replace("[StoryLines]", story.Length > 0 ? story.ToString().TrimEnd() : "You don't dwell on where you came from.");
 
             var who = new StringBuilder();
             if (!string.IsNullOrEmpty(snapshot.TraitsLine)) who.Append(snapshot.TraitsLine).Append('\n');
             if (!string.IsNullOrEmpty(snapshot.SkillsLine)) who.Append(snapshot.SkillsLine);
-            s = s.Replace("[BackstoryAndCoreTraitSummary]", who.Length > 0 ? who.ToString().TrimEnd() : "You are a practical, self-reliant person.");
+            s = s.Replace("[WhoLines]", who.Length > 0 ? who.ToString().TrimEnd() : "You are a practical, self-reliant person.");
 
-            s = s.Replace("[CadenceRuleFromIntellectAndTraits]", CadenceRuleFor(snapshot.IntellectualLevel));
-            s = s.Replace("[TopValues]", JoinOrFallback(snapshot.ValueLines, "safety, food, rest"));
-            s = s.Replace("[TopAversions]", JoinOrFallback(snapshot.AversionLines, "pain, hunger"));
+            var voice = new StringBuilder();
+            if (snapshot.VoiceLines != null)
+                foreach (string v in snapshot.VoiceLines) voice.Append("- ").Append(v).Append('\n');
+            s = s.Replace("[VoiceLines]\n", voice.ToString());
+            s = s.Replace("[Cadence]", CadenceRuleFor(snapshot.IntellectualLevel));
+
+            // Continuous trait weights (Layer 3 drift) — shown only once they've actually moved past the thresholds.
+            var temperament = new StringBuilder();
+            if (snapshot.ValueLines != null && snapshot.ValueLines.Count > 0)
+                temperament.Append("- Lately you've been more and more: ").Append(string.Join(", ", snapshot.ValueLines)).Append('\n');
+            if (snapshot.AversionLines != null && snapshot.AversionLines.Count > 0)
+                temperament.Append("- Less and less: ").Append(string.Join(", ", snapshot.AversionLines)).Append('\n');
+            s = s.Replace("[TemperamentBlock]", temperament.Length > 0 ? "\n## LATELY\n" + temperament.ToString() : "");
 
             var mem = new StringBuilder();
             if (snapshot.SemanticMemoryLines != null)
                 foreach (string line in snapshot.SemanticMemoryLines) mem.Append("- ").Append(line).Append('\n');
             if (!string.IsNullOrEmpty(snapshot.LongTermLonging))
                 mem.Append("- Deep down, you keep wanting ").Append(snapshot.LongTermLonging).Append(".\n");
-            s = s.Replace("[MemoryLines]", mem.Length > 0 ? mem.ToString().TrimEnd() : "- (nothing yet — your days are still plain)");
+            s = s.Replace("[MemoryLines]", mem.Length > 0 ? mem.ToString().TrimEnd() : "- Nothing settled yet. Your days here are still new.");
 
             return s;
         }
 
-        /// <summary>Dynamic suffix zone — everything that changes call-to-call lives here.</summary>
         public static string BuildUserPrompt(SensorySnapshot snap)
         {
             string u = UserTemplate;
-            u = u.Replace("[EpisodicLines]", JoinOrDash(snap.EpisodicLines));
-            u = u.Replace("[NearbyPawnLines]", JoinOrDash(snap.NearbyPawnLines));
-            u = u.Replace("[BodyAndSurroundingsLines]", JoinOrDash(snap.BodyAndSurroundingsLines));
-            // Colony horizon is captured at snapshot time (pure function of the Intellectual skill — Spec §3.2).
+            u = u.Replace("[EpisodicLines]", JoinOrDash(snap.EpisodicLines, "nothing much"));
+            u = u.Replace("[RecentThoughtsBlock]", RecentThoughtsBlock(snap.RecentThoughts));
+            // Live 2026-11-22: with the rule only in the block, Inkling 2 mini still repeated a thought verbatim; restating it
+            // in the final instruction (the last thing the model reads) is what made it stick.
+            bool hasRecent = snap.RecentThoughts != null && snap.RecentThoughts.Count > 0;
+            u = u.Replace("[FreshClause]", hasRecent ? " (new words, not what you were just thinking)" : "");
+            u = u.Replace("[NearbyPawnLines]", JoinOrDash(snap.NearbyPawnLines, "no one"));
+            u = u.Replace("[BodyAndSurroundingsLines]", JoinOrDash(snap.BodyAndSurroundingsLines, "nothing unusual"));
             u = u.Replace("[IntellectGatedColonyHorizon]", string.IsNullOrEmpty(snap.ColonyHorizonLine) ? "" : snap.ColonyHorizonLine);
 
             var sb = new StringBuilder();
@@ -98,16 +118,12 @@ Express your fleeting inner thought in first person, optional spoken mutter, and
             return u;
         }
 
-        // ---------------------------------------------------------------- Phase 2: Intellect-to-Horizon (Spec §3.2)
-
-        /// <summary>Speech/thought cadence by Intellectual skill tier — the "Intellect" of Spec §3.2 is the 1.6
-        /// Intellectual skill (the learning-system stat; vanilla has no separate intellect attribute).</summary>
         public static string CadenceRuleFor(int intellectLevel)
         {
-            if (intellectLevel < 0) return "short, plain sentences."; // unknown — neutral default
-            if (intellectLevel < 5) return "short, blunt sentences; you act on the first impulse that feels right.";
-            if (intellectLevel < 10) return "plain sentences of a few words; you pause to notice details before acting.";
-            return "measured, layered thoughts; you weigh consequences and other people's feelings.";
+            if (intellectLevel < 0) return "You think in plain, everyday words."; // unknown — neutral default
+            if (intellectLevel < 5) return "You think in short, blunt bursts and act on the first impulse that feels right.";
+            if (intellectLevel < 10) return "You think in plain, everyday words and notice practical details.";
+            return "You think things through and weigh consequences, but still in your own plain words.";
         }
 
         /// <summary>Colony-horizon awareness by Intellectual tier: low intellect lives in the immediate moment, high
@@ -119,21 +135,20 @@ Express your fleeting inner thought in first person, optional spoken mutter, and
             return "You track the settlement's wider state — who is hurt, what is stored, whether danger has passed.";
         }
 
-        private static string JoinOrFallback(List<string> lines, string fallback)
+        /// <summary>2026-11-22 (live: one pawn thought "Stomach's screaming…" call after call): the last thoughts go in the
+        /// dynamic zone with an explicit don't-repeat rule. Sampling alone can't fix this — each call is independent.</summary>
+        private static string RecentThoughtsBlock(List<string> thoughts)
         {
-            if (lines == null || lines.Count == 0) return fallback;
-            var sb = new StringBuilder();
-            for (int i = 0; i < lines.Count; i++)
-            {
-                if (i > 0) sb.Append(", ");
-                sb.Append(lines[i]);
-            }
+            if (thoughts == null || thoughts.Count == 0) return "";
+            var sb = new StringBuilder("\n## WHAT YOU WERE JUST THINKING\n");
+            foreach (string t in thoughts) sb.Append("- \"").Append(t).Append("\"\n");
+            sb.Append("Your next thought is new: don't repeat or reword these. If nothing has changed, notice something else: a smell, a person, a worry, a plan.\n");
             return sb.ToString();
         }
 
-        private static string JoinOrDash(List<string> lines)
+        private static string JoinOrDash(List<string> lines, string empty)
         {
-            if (lines == null || lines.Count == 0) return "- (nothing in particular)";
+            if (lines == null || lines.Count == 0) return "- " + empty;
             var sb = new StringBuilder();
             for (int i = 0; i < lines.Count; i++)
                 sb.Append("- ").Append(lines[i]).Append("\n");

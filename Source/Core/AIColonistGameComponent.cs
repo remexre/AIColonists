@@ -72,6 +72,10 @@ namespace AIColonists.Core
             public int consecutiveL1Failures;
             public int staleDrops;
 
+            // 2026-11-22 anti-repeat: the last RecentThoughtCount Layer 1 thoughts, oldest first, whether or not the desire
+            // became a job. Written on the worker thread, read on the main thread — always under lock(recentThoughts).
+            public readonly List<string> recentThoughts = new List<string>();
+
             // Phase 3: per-pawn Layer 3 consolidation cadence (Spec §7.4). The stagger itself is positional —
             // index * StaggerSecondsPerColonist in MaybeDispatchLayer3 — not stored state.
             public int lastLayer3Tick;
@@ -131,10 +135,24 @@ namespace AIColonists.Core
                    && (nowReal - st.lastLayer1RealSeconds >= s.Layer1MinRealSeconds);
         }
 
+        public const int RecentThoughtCount = 2;
+
+        /// <summary>Appends a thought to a pawn's recent-thought list, keeping the newest <see cref="RecentThoughtCount"/>.
+        /// Blank thoughts and exact repeats of the newest one are skipped. Caller holds the list's lock.</summary>
+        public static void PushRecentThought(List<string> recent, string thought)
+        {
+            if (recent == null || string.IsNullOrWhiteSpace(thought)) return;
+            thought = thought.Trim();
+            if (recent.Count > 0 && recent[recent.Count - 1] == thought) return;
+            recent.Add(thought);
+            while (recent.Count > RecentThoughtCount) recent.RemoveAt(0);
+        }
+
         /// <summary>Fire-and-forget Layer 1 evaluation. Never blocks the main thread (Spec §6.2 step 2).</summary>
         public void EnqueueAsyncLayer1(SensorySnapshot snapshot)
         {
             PawnCallState st = callStates.GetOrAdd(snapshot.PawnId, _ => new PawnCallState());
+            lock (st.recentThoughts) snapshot.RecentThoughts = new List<string>(st.recentThoughts); // copy: the worker mutates st's list
             st.layer1InFlight = true;
             st.lastLayer1Tick = Find.TickManager.TicksGame;
             st.lastLayer1RealSeconds = (float)unpausedClock.Elapsed.TotalSeconds;
@@ -251,7 +269,6 @@ namespace AIColonists.Core
                     // Phase 2 (Spec §3.2): mood → sampling entropy. The worker thread never touches the pawn — the mood
                     // percentage was captured into the snapshot on the main thread at scan time.
                     temperature = MoodEntropyMapper.MoodToTemperature(s.BaseTemperature, snapshot.MoodPercentage),
-                    topP = MoodEntropyMapper.MoodToTopP(snapshot.MoodPercentage),
                     minP = s.MinP,
                     maxTokens = s.Layer1MaxOutputTokens,
                     disableReasoning = s.DisableReasoning,
@@ -270,6 +287,9 @@ namespace AIColonists.Core
                     : (snapshot.PawnName ?? snapshot.PawnId);
                 MainThreadLog.Message("[AIColonists] " + who + " Layer 1: impulse_id=" + (result == null ? -1 : result.impulse_id)
                     + " of " + request.optionCount + ", inner_voice=\"" + (result == null ? "" : result.inner_voice) + "\"");
+
+                if (result != null && callStates.TryGetValue(snapshot.PawnId, out PawnCallState thoughtState))
+                    lock (thoughtState.recentThoughts) PushRecentThought(thoughtState.recentThoughts, result.inner_voice);
 
                 if (result == null || !snapshot.Affordances.IsValidImpulse(result.impulse_id))
                 {
@@ -455,7 +475,7 @@ namespace AIColonists.Core
 
             var thingIdToName = new Dictionary<string, string>();
             foreach (List<Pawn> batch in eligible)
-                foreach (Pawn pawn in batch) thingIdToName[pawn.ThingID] = pawn.LabelCap;
+                foreach (Pawn pawn in batch) thingIdToName[pawn.ThingID] = PawnText.ShortName(pawn) ?? ""; // prompt-facing: never LabelCap
 
             ILlamaBridge b = EnsureBridge();
             if (b == null) return; // settings vanished mid-flight — skip this cycle
@@ -538,7 +558,14 @@ namespace AIColonists.Core
         {
             var m = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (Pawn pawn in map.mapPawns.FreeColonistsSpawned)
-                if (!string.IsNullOrEmpty(pawn.LabelCap)) m[pawn.LabelCap] = pawn.ThingID;
+            {
+                // Prompts now use short names; LabelCap stays as a fallback key for replies naming the old form.
+                string shortName = PawnText.ShortName(pawn);
+                if (!string.IsNullOrEmpty(shortName)) m[shortName] = pawn.ThingID;
+                string cap = null;
+                try { cap = pawn.LabelCap; } catch { }
+                if (!string.IsNullOrEmpty(cap) && !m.ContainsKey(cap)) m[cap] = pawn.ThingID;
+            }
             return m;
         }
 
@@ -561,6 +588,7 @@ namespace AIColonists.Core
                 float stagger = index * StaggerSecondsPerColonist; // Spec §8.2: spread consolidation across the colony
                 index++;
 
+                if (PawnText.IsBaby(pawn)) continue; // no consolidation for newborns/babies (live 2026-11-22)
                 PawnCallState st = callStates.GetOrAdd(pawn.ThingID, _ => new PawnCallState());
                 if (st.layer3InFlight) continue;
                 if (nowTick - st.lastLayer3Tick < s.Layer3MinGameTicks) continue;
@@ -572,16 +600,19 @@ namespace AIColonists.Core
 
                 // Build the request on the MAIN thread — mind state is not thread-safe.
                 ColonistMindState mind = world.GetOrCreateMindState(pawn);
+                // Refresh the stored name every cycle: saves from before 2026-11-22 hold LabelCap (with title + color tags).
+                string shortName = PawnText.ShortName(pawn);
+                if (!string.IsNullOrEmpty(shortName)) mind.pawnName = shortName;
                 Layer3Request req = new Layer3Request
                 {
                     model = s.Layer3Model,
-                    systemPrompt = Layer3PromptBuilder.BuildSystemPrompt(mind.pawnName),
+                    systemPrompt = Layer3PromptBuilder.BuildSystemPrompt(mind.pawnName, PawnText.Title(pawn), NatureLine(pawn)),
                     userPrompt = Layer3PromptBuilder.BuildUserPrompt(
                         mind.memory.EpisodicTexts(),
                         mind.memory.semantic,
                         mind.longTermLonging,
                         mind.traitWeights),
-                    temperature = s.BaseTemperature,
+                    temperature = s.Layer3Temperature, // cooler: what it writes stays in the pawn's prompt for good
                     minP = s.MinP,
                     maxTokens = s.Layer3MaxOutputTokens,
                     disableReasoning = s.DisableReasoning,
@@ -608,6 +639,25 @@ namespace AIColonists.Core
                     }
                 });
             }
+        }
+
+        /// <summary>Layer 3's one-line sketch of who the pawn is ("Others would describe them as abrasive and pessimist.").</summary>
+        private static string NatureLine(Pawn pawn)
+        {
+            try
+            {
+                var all = pawn.story?.traits?.allTraits;
+                if (all == null) return "";
+                var parts = new List<string>();
+                foreach (Trait t in all)
+                {
+                    if (t == null || t.Suppressed) continue;
+                    parts.Add(((string)t.LabelCap ?? "").ToLowerInvariant());
+                    if (parts.Count >= 4) break;
+                }
+                return parts.Count > 0 ? "Others would describe them as " + SensoryFramingBuilder.JoinAnd(parts) + "." : "";
+            }
+            catch { return ""; }
         }
 
         /// <summary>Resolves a roster name to a pawn on this map — case-insensitive LabelCap/LabelShort match.</summary>

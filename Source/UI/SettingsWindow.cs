@@ -65,8 +65,12 @@ namespace AIColonists.UI
                 "How long a real request may take before it's abandoned. CPU inference needs ~30000; a GPU or hosted model is usually fine with a few thousand.",
                 "timeout", ref s.RequestTimeoutMs, 500, 600000, Defaults.RequestTimeoutMs);
             page.Float("Base temperature",
-                "Sampling temperature for all layers. Layer 1 then adds a mood offset and clamps the result to 0.50-0.85.",
+                "Sampling temperature for Layers 1 and 2. Layer 1 adds a small mood offset (-0.15 to +0.20). "
+                + "1.0 suits hosted models like Inkling; very small local models may do better around 0.65.",
                 "temp", ref s.BaseTemperature, 0f, 2f, Defaults.BaseTemperature);
+            page.Float("Layer 3 temperature",
+                "Temperature for memory consolidation. Keep it lower than the base: what Layer 3 writes stays in the colonist's prompt for good.",
+                "temp3", ref s.Layer3Temperature, 0f, 2f, Defaults.Layer3Temperature);
             page.Float("min_p", "Drops unlikely tokens even at higher temperatures. 0 disables it.", "minp", ref s.MinP, 0f, 1f, Defaults.MinP);
             page.Checkbox("Turn off model reasoning",
                 "Asks reasoning models to answer without thinking first (sends reasoning_effort: \"none\"). Without it they can spend the whole "
