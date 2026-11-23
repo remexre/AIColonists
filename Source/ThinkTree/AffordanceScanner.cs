@@ -17,6 +17,12 @@ namespace AIColonists.ThinkTree
         public LocalTargetInfo targetA;     // concrete Thing or IntVec3 reference
         public LocalTargetInfo targetB;     // optional secondary target (chair/table)
         public WorkTypeDef workType;        // origin work type, if from a WorkGiver
+        // Work options only: the giver that offered this job and the thing it scanned. The job is REBUILT by this giver
+        // at execution time (QueuedDesire.TryMakeJob) — never from def + targets alone, which drops every other field the
+        // giver set (live crash 2026-11-22: Pick Up And Haul's HaulToInventory lost job.targetQueueA → NRE in
+        // ReservationUtility.ReserveAsManyAsPossible). Plain references; only dereferenced on the main thread.
+        public WorkGiver_Scanner workGiver;
+        public Thing workThing;
 
     }
 
@@ -191,6 +197,8 @@ namespace AIColonists.ThinkTree
                         // to the scanned thing so IsValidAndReservable's HasThing/Destroyed/reachability re-check always has one.
                         targetA = job.targetA.HasThing ? job.targetA : new LocalTargetInfo(t),
                         targetB = job.targetB,
+                        workGiver = scanner,
+                        workThing = t,
                     });
                 }
             }

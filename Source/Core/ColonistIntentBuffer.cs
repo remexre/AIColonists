@@ -34,9 +34,14 @@ namespace AIColonists.Core
         // Phase 2 diagnostics: the exact sensory phrasing from the affordance list — lets the [job started] log line
         // quote what the LLM picked, so "Layer 1 said X" can be correlated with "pawn did Y" from Player.log alone.
         public string sensoryDescription;
+        // Work desires: the giver + scanned thing, so the job can be rebuilt fresh at execution (see TryMakeJob).
+        public WorkGiver_Scanner workGiver;
+        public Thing workThing;
 
         public QueuedDesire(AffordanceOption option, string innerVoice)
         {
+            workGiver = option.workGiver;
+            workThing = option.workThing;
             jobDef = option.jobDef;
             targetA = option.targetA;
             targetB = option.targetB;
@@ -67,6 +72,34 @@ namespace AIColonists.Core
 
             // TODO(Phase 1): full reservation check via pawn.ReservationManager before JobMaker.MakeJob.
             return true;
+        }
+
+        /// <summary>
+        /// Builds the Job to start, on the MAIN THREAD, after IsValidAndReservable passed. Returns null when the desire went
+        /// stale. Work desires ask their WorkGiver again (HasJobOnThing, then JobOnThing — vanilla's two-stage contract) for
+        /// a fresh, fully populated job: the giver sets fields beyond def + targets (target queues, count, bill, haul mode...)
+        /// that a JobMaker rebuild silently drops. Live crash 2026-11-22: Pick Up And Haul's HaulToInventory rebuilt that way
+        /// had a null targetQueueA → NRE in ReservationUtility.ReserveAsManyAsPossible on every AI-picked haul. If the giver
+        /// no longer offers a job of the same def for that thing, the world moved on: stale, not a substitute job.
+        /// Needs/social desires (no giver) are fully described by def + targets and still use JobMaker.
+        /// </summary>
+        public Job TryMakeJob(Pawn pawn)
+        {
+            if (workGiver == null)
+                return JobMaker.MakeJob(jobDef, targetA, targetB);
+            if (workThing == null || workThing.Destroyed) return null;
+            try
+            {
+                if (!workGiver.HasJobOnThing(pawn, workThing)) return null;
+                Job job = workGiver.JobOnThing(pawn, workThing);
+                return job != null && job.def == jobDef ? job : null;
+            }
+            catch (System.Exception e)
+            {
+                // Same defensive rule as the scan: a throwing giver drops this desire, never the pawn's think tree.
+                Log.ErrorOnce("[AIColonists] rebuilding " + (jobDef != null ? jobDef.defName : "?") + " via " + workGiver.GetType().Name + " threw: " + e.Message, 4817);
+                return null;
+            }
         }
     }
 }

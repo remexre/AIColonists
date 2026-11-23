@@ -30,7 +30,9 @@ namespace AIColonists.ThinkTree
             if (manager.IntentBuffer.TryPopDesire(pawn.ThingID, out QueuedDesire desire))
             {
                 // Re-verify on the main thread — the world may have moved while the LLM was thinking (Spec §10).
-                if (desire.IsValidAndReservable(pawn))
+                // Work desires are rebuilt by their WorkGiver here (TryMakeJob); null = stale, same as a failed re-check.
+                Job job = desire.IsValidAndReservable(pawn) ? desire.TryMakeJob(pawn) : null;
+                if (job != null)
                 {
                     manager.NoteDesireExecuted(pawn.ThingID); // Phase 2: an AI decision actually became a job — breakers reset
                     // Phase 2 diagnostics (T4 grading): quote the exact sensory phrasing from the affordance list so
@@ -39,7 +41,6 @@ namespace AIColonists.ThinkTree
                     // generic phrasing ("Work on the human nearby" was Milk for one pawn and a medical job for another),
                     // and only the def says which vanilla driver will actually run it.
                     Log.Message("[AIColonists] " + SafeWho(pawn) + " [job started] \"" + desire.sensoryDescription + "\" (" + desire.jobDef.defName + ")");
-                    Job job = JobMaker.MakeJob(desire.jobDef, desire.targetA, desire.targetB);
                     job.expiryInterval = 1800; // re-evaluate after ~30s of game time if long-running (Spec §6.2)
                     MoteBubbleUtility.TryThrowThoughtMote(pawn, desire.innerVoiceShort);
 

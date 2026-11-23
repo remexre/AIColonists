@@ -417,6 +417,8 @@ namespace AIColonists.Tests
             opts = AffordanceScanner.Scan(pawn);
             Check(opts.Any(o => o.sensoryDescription.Contains("steel vein") && o.jobDef != null && o.targetA.HasThing),
                 "work affordance carries the resolved job (JobOnThing)");
+            Check(opts.Any(o => o.sensoryDescription.Contains("steel vein") && o.workGiver != null && o.workThing != null && o.workThing.def.label == "steel vein"),
+                "work affordance remembers its WorkGiver + scanned thing (so execution rebuilds the job via the giver, 2026-11-22)");
 
             TestRig.WorkJobOnThing = t => null; // giver can't make a job for this target (missing skill/tool/etc.)
             opts = AffordanceScanner.Scan(pawn);
@@ -789,6 +791,44 @@ namespace AIColonists.Tests
             Check(workJob != null && workJob.def != null, "deposited WORK desire consumed as Job (no longer silently discarded)");
             Check(Log.Messages.Any(m => m.Contains("[job started]") && m.Contains("\"work\"") && m.Contains("(StubJob)")),
                 "[job started] log line quotes the sensory phrasing + resolved JobDef (T4 decision→execution correlation, §23.5 attribution)");
+
+            // 2026-11-22 live crash (Pick Up And Haul): work jobs must come from their WorkGiver at execution time, with every
+            // field it sets — a JobMaker rebuild from def + targets dropped HaulToInventory's targetQueueA → vanilla NRE.
+            var haulDef = new JobDef();
+            var box = new Thing { Position = new IntVec3(2, 0), def = new ThingDef { label = "wood" } };
+            var giver = new Verse.AI.WorkGiver_Scanner();
+            var haulOpt = MakeOpt(1, "haul", haulDef, box);
+            haulOpt.workGiver = giver;
+            haulOpt.workThing = box;
+            int giverCalls = 0;
+            try
+            {
+                TestRig.WorkJobOnThing = t => { giverCalls++; return new Job { def = haulDef, targetA = new LocalTargetInfo(t), targetQueueA = new List<LocalTargetInfo> { new LocalTargetInfo(t) }, count = 7 }; };
+                comp.IntentBuffer.Push("j1", new QueuedDesire(haulOpt, "tidy up"));
+                var haul = new ExposedJobGiver().Give(pawn);
+                Check(haul != null && giverCalls == 1 && haul.targetQueueA != null && haul.targetQueueA.Count == 1 && haul.count == 7 && haul.expiryInterval == 1800,
+                    "work desire: job rebuilt by its WorkGiver at execution, keeping giver-set fields (targetQueueA, count)");
+
+                TestRig.WorkHasJobOnThing = (p, t) => false;
+                comp.IntentBuffer.Push("j1", new QueuedDesire(haulOpt, "tidy up"));
+                Check(new ExposedJobGiver().Give(pawn) == null, "work desire: giver no longer has a job for the thing → stale, discarded");
+                TestRig.WorkHasJobOnThing = TestRig.DefaultWorkHasJobOnThing;
+
+                TestRig.WorkJobOnThing = t => new Job { def = new JobDef(), targetA = new LocalTargetInfo(t) };
+                comp.IntentBuffer.Push("j1", new QueuedDesire(haulOpt, "tidy up"));
+                Check(new ExposedJobGiver().Give(pawn) == null, "work desire: giver now offers a DIFFERENT job → stale, not substituted");
+
+                TestRig.WorkJobOnThing = t => throw new NullReferenceException("giver blew up");
+                comp.IntentBuffer.Push("j1", new QueuedDesire(haulOpt, "tidy up"));
+                Job thrown = null; bool escaped = false;
+                try { thrown = new ExposedJobGiver().Give(pawn); } catch { escaped = true; }
+                Check(!escaped && thrown == null, "work desire: a throwing giver drops the desire without breaking the think tree");
+            }
+            finally
+            {
+                TestRig.WorkJobOnThing = TestRig.DefaultWorkJobOnThing;
+                TestRig.WorkHasJobOnThing = TestRig.DefaultWorkHasJobOnThing;
+            }
 
             var gate = new ExposedGate();
             pawn.Drafted = true;

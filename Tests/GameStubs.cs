@@ -384,6 +384,10 @@ namespace Verse
         public JobDef def;
         public LocalTargetInfo targetA;
         public LocalTargetInfo targetB;
+        // [CONFIRMED] vanilla Job fields a WorkGiver may set beyond def + targets (Pick Up And Haul fills targetQueueA;
+        // hauling/bill givers set count). Used to prove work jobs come from the giver, not a JobMaker rebuild.
+        public List<LocalTargetInfo> targetQueueA;
+        public int count = -1;
 
         // [CONFIRMED decompiled 2026-11-15] 1.6 has a Job(JobDef) ctor (the AI hold job uses `new Job(JobDefOf.Wait)`).
         public Job() { }
