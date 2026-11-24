@@ -92,6 +92,14 @@ namespace AIColonists.UI
             page.Int("Layer 3 min game ticks", ticksTip, "gt3", ref s.Layer3MinGameTicks, 60, 600000, Defaults.Layer3MinGameTicks, TicksHint);
             page.Float("Layer 3 min real seconds", realTip, "rs3", ref s.Layer3MinRealSeconds, 5f, 3600f, Defaults.Layer3MinRealSeconds);
 
+            page.Header("Logging");
+            page.Checkbox("Log prompts and replies to a file",
+                "Appends every request's full system and user prompt, plus the model's raw reply, to two files next to Player.log. "
+                + "Player.log itself only gets one-line summaries.",
+                ref s.LogPromptsToFile, Defaults.LogPromptsToFile);
+            page.Note("Writes " + PromptLogPath(AIColonists.Inference.PromptLog.TextFileName) + " (readable) and "
+                + AIColonists.Inference.PromptLog.JsonlFileName + " (one JSON object per call). They grow without limit; delete them whenever you like.");
+
             page.Gap(12f);
             if (page.Button("Reset tuning to defaults", "Resets temperature, min_p, token budgets and timing. Keeps the switches, servers, models and timeout."))
             {
@@ -102,6 +110,12 @@ namespace AIColonists.UI
 
             contentHeight = page.y + 8f;
             Widgets.EndScrollView();
+        }
+
+        private static string PromptLogPath(string file)
+        {
+            string dir = AIColonists.Inference.PromptLog.Directory;
+            return string.IsNullOrEmpty(dir) ? file : System.IO.Path.Combine(dir, file);
         }
 
         private static string TicksHint(int ticks) => "~" + (ticks / 60f).ToString("0.#") + " s of game time at 1x";

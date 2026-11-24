@@ -143,6 +143,7 @@ namespace AIColonists.Tests
             await Test_TransportSingleFlightAsync();      // Mono concurrent-send fix: gate serializes all layers
             await Test_TransportRetryOnSendFailureAsync(); // one retry on transport failure only
             await Test_UserAgentAsync(); // RimWorld-identifying User-Agent on both HTTP pools
+            await Test_PromptLogAsync(); // optional full prompt/reply log (.log + .jsonl)
             await Test_ProviderTestAsync(); // settings "Test providers" button: probe outcomes + tester + dialog smoke
             Test_SettingsPage(); // every Settings field has a control; scrolling; reset-to-defaults scope
             Test_MemoryThoughtDefs(); // mood bridge: def wiring + calibration (no code — granted by vanilla machinery)
@@ -2271,6 +2272,115 @@ namespace AIColonists.Tests
             Check(seen.Count >= 2, "server saw the first send and the retry (" + seen.Count + " requests)");
             Check(seen.Count >= 1 && seen[0].Contains(expected), "first send (shared pool) carries the User-Agent");
             Check(seen.Count >= 2 && seen[1].Contains(expected), "retry (fresh pool) carries the User-Agent");
+        }
+
+        static async Task Test_PromptLogAsync()
+        {
+            Section("Prompt log: full prompts + replies to AIColonists-prompts.log/.jsonl");
+            string root = Path.Combine(Path.GetTempPath(), "aic-promptlog-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            string savedDir = PromptLog.Directory;
+            string savedSaveData = Verse.GenFilePaths.SaveDataFolderPath;
+            try
+            {
+                // Folder: Logs/ under save data when it exists (Linux 1.7), else save data itself (Windows).
+                Verse.GenFilePaths.SaveDataFolderPath = root;
+                Check(PromptLog.ResolveDirectory() == root, "no Logs/ folder: files go in the save-data folder");
+                Directory.CreateDirectory(Path.Combine(root, "Logs"));
+                Check(PromptLog.ResolveDirectory() == Path.Combine(root, "Logs"), "Logs/ folder exists: files go next to Player.log");
+
+                string dir = Path.Combine(root, "Logs");
+                PromptLog.Directory = dir;
+                string textPath = Path.Combine(dir, PromptLog.TextFileName), jsonPath = Path.Combine(dir, PromptLog.JsonlFileName);
+                string inner = "{\"impulse_id\":2,\"inner_voice\":\"the slime again\",\"spoken_mutter\":\"ugh\"}";
+                var req = new Layer1Request
+                {
+                    model = "m1", systemPrompt = "You are Albina.\nYou live in a colony.", userPrompt = "## ON YOUR MIND\n- \"quoted\"",
+                    optionCount = 3, logLabel = "Albina (Human1006)",
+                };
+
+                // 1. Off (the default): nothing written.
+                var (offUrl, offTask) = ServeOnce(HttpOkResponse(ChatEnvelope(inner)));
+                await new LlamaServerClient(new Settings { Layer1ServerUrl = offUrl, RequestTimeoutMs = 5000 }).RequestLayer1Async(req);
+                await offTask;
+                Check(!File.Exists(textPath) && !File.Exists(jsonPath), "setting off: no prompt log files are created");
+
+                // 2. On, success.
+                var (okUrl, okTask) = ServeOnce(HttpOkResponse(ChatEnvelope(inner)));
+                Layer1Result r = await new LlamaServerClient(new Settings { Layer1ServerUrl = okUrl, RequestTimeoutMs = 5000, LogPromptsToFile = true }).RequestLayer1Async(req);
+                await okTask;
+                Check(r != null && r.inner_voice == "the slime again", "logging doesn't change the parsed result");
+                string text = File.Exists(textPath) ? File.ReadAllText(textPath) : "";
+                Check(text.Contains(" · Layer 1 · Albina (Human1006) · HTTP 200 in "), "text log header names the layer, pawn and status");
+                Check(text.Contains("model: m1 · " + okUrl + "/v1/chat/completions"), "text log names the model and URL");
+                Check(text.Contains("--- system ---\nYou are Albina.\nYou live in a colony.\n--- user ---\n## ON YOUR MIND\n- \"quoted\"\n"),
+                    "text log has the full system + user prompts with real line breaks");
+                Check(text.Contains("--- reply") && text.Contains(inner), "text log has the model's reply");
+
+                string[] lines = File.Exists(jsonPath) ? File.ReadAllLines(jsonPath) : new string[0];
+                Check(lines.Length == 1, "one JSONL line per call (got " + lines.Length + ")");
+                bool parsed = false;
+                if (lines.Length == 1)
+                {
+                    try
+                    {
+                        using (var doc = System.Text.Json.JsonDocument.Parse(lines[0]))
+                        {
+                            var o = doc.RootElement;
+                            parsed = o.GetProperty("layer").GetInt32() == 1
+                                && o.GetProperty("label").GetString() == "Albina (Human1006)"
+                                && o.GetProperty("status").GetInt32() == 200
+                                && o.GetProperty("error").ValueKind == System.Text.Json.JsonValueKind.Null
+                                && o.GetProperty("content").GetString() == inner
+                                && o.GetProperty("request").GetProperty("messages")[0].GetProperty("content").GetString() == req.systemPrompt
+                                && o.GetProperty("response_body").GetString().Contains("\"choices\"");
+                        }
+                    }
+                    catch (Exception e) { Console.WriteLine("    JSONL parse: " + e.Message); }
+                }
+                Check(parsed, "JSONL record parses; request embedded as JSON, raw response kept, content extracted");
+
+                // 3. HTTP error: the attempt is still logged, with the server's body and the error.
+                var (errUrl, errTask) = ServeOnce(HttpRawResponse("500 Internal Server Error", "{\"error\":\"boom\"}"));
+                try { await new LlamaServerClient(new Settings { Layer1ServerUrl = errUrl, RequestTimeoutMs = 5000, LogPromptsToFile = true }).RequestLayer1Async(req); }
+                catch { /* expected */ }
+                await errTask;
+                text = File.ReadAllText(textPath);
+                Check(text.Contains("HTTP 500 in ") && text.Contains("--- raw response ---\n{\"error\":\"boom\"}") && text.Contains("--- error ---\nHTTP 500"),
+                    "HTTP errors are logged with the server's reply");
+                Check(File.ReadAllLines(jsonPath).Length == 2, "files append (second call added a second JSONL line)");
+
+                // 4. Unwritable folder: the request still succeeds.
+                PromptLog.Directory = Path.Combine(root, "does", "not", "exist");
+                var (badUrl, badTask) = ServeOnce(HttpOkResponse(ChatEnvelope(inner)));
+                Layer1Result r2 = null;
+                try { r2 = await new LlamaServerClient(new Settings { Layer1ServerUrl = badUrl, RequestTimeoutMs = 5000, LogPromptsToFile = true }).RequestLayer1Async(req); }
+                catch { }
+                await badTask;
+                Check(r2 != null && r2.impulse_id == 2, "a prompt log that can't be written never breaks the request");
+
+                // 5. Formatting details.
+                var c = new PromptLog.Call
+                {
+                    layer = 3, label = "Bob (Human7)", model = "m3", systemPrompt = "S", userPrompt = "U", attempt = 1, status = 200,
+                    content = "{}", reasoning = "thinking...", finishReason = "stop", completionTokens = 42, requestJson = "{\"a\":1}",
+                };
+                string block = PromptLog.FormatText(c);
+                Check(block.Contains(" · Layer 3 · Bob (Human7) · retry · HTTP 200") && block.Contains("--- reasoning ---\nthinking...\n")
+                    && block.Contains("--- reply (finish: stop, 42 tokens) ---\n{}\n"), "text block shows retry, reasoning, finish reason and token count");
+                c.content = null; c.responseBody = null; c.status = 0; c.error = "llama-server request timed out after 500ms";
+                block = PromptLog.FormatText(c);
+                Check(block.Contains("· no response in ") && block.Contains("--- error ---\nllama-server request timed out"), "no-response attempts show the error");
+                Check(PromptLog.FormatJsonLine(c).IndexOf('\n') < 0, "JSONL record never contains a raw newline");
+                Check(PromptLog.CompactJson("{ \"a b\" : [1,\n 2],\n\t\"c\":\"x\\\" \\n y\" }") == "{\"a b\":[1,2],\"c\":\"x\\\" \\n y\"}",
+                    "CompactJson strips whitespace between tokens but not inside strings (escaped quotes included)");
+            }
+            finally
+            {
+                PromptLog.Directory = savedDir;
+                Verse.GenFilePaths.SaveDataFolderPath = savedSaveData;
+                try { Directory.Delete(root, true); } catch { }
+            }
         }
 
         /// <summary>Raw HTTP response with an arbitrary status line (for error-path probes).</summary>

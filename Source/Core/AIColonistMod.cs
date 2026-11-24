@@ -32,6 +32,11 @@ namespace AIColonists.Core
             // The Mod ctor runs during mod load, before any map exists: the correct point to patch.
             new Harmony("jrhh.AIColonists").PatchAll();
 
+            // The prompt log's folder needs GenFilePaths (Unity paths), so resolve it here on the main thread; requests
+            // log from worker threads.
+            try { AIColonists.Inference.PromptLog.Directory = AIColonists.Inference.PromptLog.ResolveDirectory(); }
+            catch (System.Exception e) { Log.Warning("[AIColonists] prompt log disabled, couldn't find the log folder: " + e.Message); }
+
             Log.Message("[AIColonists] Loaded (Harmony patches applied). Enable AI in Mod Settings once llama-server is running.");
         }
 

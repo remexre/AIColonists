@@ -120,6 +120,10 @@ namespace AIColonists.Core
                 notes[pawn.ThingID] = BuildPawnNote(pawn, thingIdToName);
 
             req.userPrompt = Layer2PromptBuilder.BuildUserPrompt(batch, notes);
+
+            var names = new List<string>();
+            foreach (Pawn pawn in batch) names.Add(PawnText.ShortName(pawn) ?? pawn.ThingID);
+            req.logLabel = string.Join(", ", names); // prompt log only
             return req;
         }
 

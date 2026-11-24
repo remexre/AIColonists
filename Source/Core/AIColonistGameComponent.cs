@@ -273,6 +273,7 @@ namespace AIColonists.Core
                     maxTokens = s.Layer1MaxOutputTokens,
                     disableReasoning = s.DisableReasoning,
                     optionCount = snapshot.Affordances != null ? snapshot.Affordances.Count : 0,
+                    logLabel = snapshot.PawnName != null ? snapshot.PawnName + " (" + snapshot.PawnId + ")" : snapshot.PawnId,
                 };
 
                 Layer1Result result = await bridge.RequestLayer1Async(request);
@@ -616,6 +617,7 @@ namespace AIColonists.Core
                     minP = s.MinP,
                     maxTokens = s.Layer3MaxOutputTokens,
                     disableReasoning = s.DisableReasoning,
+                    logLabel = mind.pawnName + " (" + pawn.ThingID + ")",
                 };
 
                 string thingId = pawn.ThingID;

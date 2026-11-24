@@ -160,6 +160,9 @@ namespace Verse
     public enum LoadSaveMode { Unknown, Loading, Saving, PostLoadInit }
     public static class Scribe { public static LoadSaveMode mode = LoadSaveMode.Unknown; } // [GUESS]
 
+    // [CONFIRMED] Verse.GenFilePaths.SaveDataFolderPath (decompiled 1.7). Settable here so tests can point it at a temp dir.
+    public static class GenFilePaths { public static string SaveDataFolderPath = null; }
+
     // [CONFIRMED] values used by this mod: Value, Deep.
     public enum LookMode { Value, Deep, Reference }
 
@@ -191,6 +194,7 @@ namespace Verse
         public static List<string> Errors = new List<string>();   // test recorder for Error/ErrorOnce (2026-11-16, §23.3)
         public static readonly HashSet<int> UsedErrorKeys = new HashSet<int>(); // cleared by TestRig.Reset() for cross-test isolation
         public static void Message(string m) { Messages.Add(m); }
+        public static void Warning(string m) { Messages.Add(m); } // [CONFIRMED] Verse.Log.Warning exists in 1.7
         public static void Error(string m) { Errors.Add(m); }
         // Mirrors vanilla semantics: the first call per key logs, later calls with the same key are dropped.
         public static void ErrorOnce(string m, int id) { if (UsedErrorKeys.Add(id)) Errors.Add(m); }

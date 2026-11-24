@@ -57,6 +57,10 @@ namespace AIColonists.Core
         // the field for non-reasoning models; llama-server ignores it.
         public bool DisableReasoning = false;
 
+        // Appends every call's full prompts and raw reply to AIColonists-prompts.log/.jsonl next to Player.log (PromptLog).
+        // Off by default: the files grow without limit.
+        public bool LogPromptsToFile = false;
+
         // Inference timeout — a hung server must never wedge the intent pipeline (Spec §9 Phase 1).
         public int RequestTimeoutMs = 3000;
 
@@ -104,6 +108,7 @@ namespace AIColonists.Core
             Scribe_Values.Look(ref Layer3MaxOutputTokens, "layer3MaxOutputTokens", 350);
             Scribe_Values.Look(ref RequestTimeoutMs, "requestTimeoutMs", 3000);
             Scribe_Values.Look(ref DisableReasoning, "disableReasoning", false);
+            Scribe_Values.Look(ref LogPromptsToFile, "logPromptsToFile", false);
         }
     }
 }

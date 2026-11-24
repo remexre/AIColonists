@@ -92,16 +92,51 @@ namespace AIColonists.Inference
             // Hand-built body (see class docs for why not JsonUtility). Keep the exact string: on a server
             // rejection we log BOTH sides of the wire in one line.
             string json = BuildChatCompletionsJson(request);
-            return await SendChatCompletionAsync(settings.Layer1ServerUrl, json, ParseLayer1);
+            return await SendChatCompletionAsync(settings.Layer1ServerUrl, json, ParseLayer1,
+                LogContext(1, request.logLabel, request.model, request.systemPrompt, request.userPrompt));
         }
 
         /// <summary>Batched room social call (Spec §7.3). Same hand-built wire format as Layer 1, different endpoint + schema.</summary>
         public async Task<Layer2Result> RequestLayer2Async(Layer2Request request) =>
-            await SendChatCompletionAsync(settings.Layer2ServerUrl, BuildLayer2Json(request), ParseLayer2);
+            await SendChatCompletionAsync(settings.Layer2ServerUrl, BuildLayer2Json(request), ParseLayer2,
+                LogContext(2, request.logLabel, request.model, request.systemPrompt, request.userPrompt));
 
         /// <summary>Per-colonist memory consolidation call (Spec §7.4).</summary>
         public async Task<Layer3Result> RequestLayer3Async(Layer3Request request) =>
-            await SendChatCompletionAsync(settings.Layer3ServerUrl, BuildLayer3Json(request), ParseLayer3);
+            await SendChatCompletionAsync(settings.Layer3ServerUrl, BuildLayer3Json(request), ParseLayer3,
+                LogContext(3, request.logLabel, request.model, request.systemPrompt, request.userPrompt));
+
+        /// <summary>Prompt-log context for one call, or null when the prompt log is off (Settings.LogPromptsToFile).</summary>
+        private PromptLog.Call LogContext(int layer, string label, string model, string systemPrompt, string userPrompt)
+        {
+            if (settings == null || !settings.LogPromptsToFile) return null;
+            return new PromptLog.Call { layer = layer, label = label, model = model, systemPrompt = systemPrompt, userPrompt = userPrompt };
+        }
+
+        /// <summary>Writes one attempt to the prompt log (no-op when <paramref name="ctx"/> is null). Never throws.</summary>
+        private static void LogAttempt(PromptLog.Call ctx, string url, string json, int attempt, System.Diagnostics.Stopwatch sw,
+            int status, string body, string error)
+        {
+            if (ctx == null) return;
+            try
+            {
+                var c = new PromptLog.Call
+                {
+                    layer = ctx.layer, label = ctx.label, model = ctx.model, systemPrompt = ctx.systemPrompt, userPrompt = ctx.userPrompt,
+                    time = DateTime.Now, url = url, attempt = attempt, elapsedMs = sw.ElapsedMilliseconds, status = status,
+                    requestJson = json, responseBody = body, error = error,
+                };
+                if (!string.IsNullOrEmpty(body))
+                {
+                    c.content = ExtractJsonString(body, "content");
+                    c.reasoning = ExtractJsonString(body, "reasoning_content") ?? ExtractJsonString(body, "reasoning");
+                    c.finishReason = ExtractJsonString(body, "finish_reason");
+                    c.completionTokens = ExtractJsonInt(body, "completion_tokens");
+                }
+                PromptLog.Write(c);
+            }
+            catch { /* the prompt log is diagnostics only — it must never break a request */ }
+        }
 
         // Cold model loads measured at ~8.3 s on the game PC (RX 6800 + Ollama, qwen2.5:3b, 2026-11-15). The warmup
         // must outlive that by a wide margin — it runs once per map session on a background thread, so being generous
@@ -236,7 +271,7 @@ namespace AIColonists.Inference
 
         /// <summary>Shared /v1/chat/completions transport for ALL layers (Spec §7.1–§7.4): single-flight gate,
         /// per-request timeout, one retry on transport failure, both-sides-of-the-wire error logging.</summary>
-        private async Task<T> SendChatCompletionAsync<T>(string baseUrl, string json, Func<string, T> parser)
+        private async Task<T> SendChatCompletionAsync<T>(string baseUrl, string json, Func<string, T> parser, PromptLog.Call log = null)
         {
             string url = TrimSlash(baseUrl) + "/v1/chat/completions";
             int timeoutMs = Math.Max(500, settings.RequestTimeoutMs);
@@ -246,6 +281,7 @@ namespace AIColonists.Inference
             {
                 for (int attempt = 0; ; attempt++)
                 {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
                     using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs)))
                     {
                         HttpResponseMessage resp;
@@ -257,32 +293,44 @@ namespace AIColonists.Inference
                         }
                         catch (System.Threading.Tasks.TaskCanceledException)
                         {
-                            throw new Exception("llama-server request timed out after " + timeoutMs + "ms (" + url + ")");
+                            string timedOut = "llama-server request timed out after " + timeoutMs + "ms (" + url + ")";
+                            LogAttempt(log, url, json, attempt, sw, 0, null, timedOut);
+                            throw new Exception(timedOut);
                         }
-                        catch (HttpRequestException e) when (attempt == 0)
+                        catch (HttpRequestException e)
                         {
+                            string detail = e.Message + (e.InnerException != null ? " | inner: " + e.InnerException.Message : "");
+                            LogAttempt(log, url, json, attempt, sw, 0, null, "transport error: " + detail + (attempt == 0 ? " (retrying once)" : ""));
+                            if (attempt > 0) throw;
                             // Mono concurrent-send transport failure — retry ONCE with a fresh budget. Log both
                             // exception levels so the next occurrence is diagnosable from Player.log alone.
                             // Worker thread (§23.3): MainThreadLog, never Verse.Log directly.
-                            MainThreadLog.Message("[AIColonists] transport error, retrying once: " + e.Message
-                                + (e.InnerException != null ? " | inner: " + e.InnerException.Message : ""));
+                            MainThreadLog.Message("[AIColonists] transport error, retrying once: " + detail);
                             await Task.Delay(500);
                             continue;
                         }
 
                         using (resp)
                         {
+                            string body = await resp.Content.ReadAsStringAsync();
                             if (!resp.IsSuccessStatusCode)
                             {
                                 // Live-verified on 1.6: the server answered HTTP 400 "'messages' is required" — include both sides of the wire in the exception so one log line diagnoses it.
-                                string errBody = await resp.Content.ReadAsStringAsync();
+                                LogAttempt(log, url, json, attempt, sw, (int)resp.StatusCode, body, "HTTP " + (int)resp.StatusCode);
                                 throw new Exception("llama-server HTTP " + (int)resp.StatusCode + " from " + url
-                                    + " | server: " + Truncate(errBody)
+                                    + " | server: " + Truncate(body)
                                     + " | sent: " + Truncate(json));
                             }
 
-                            string body = await resp.Content.ReadAsStringAsync();
-                            return parser(body);
+                            T parsed;
+                            try { parsed = parser(body); }
+                            catch (Exception e)
+                            {
+                                LogAttempt(log, url, json, attempt, sw, (int)resp.StatusCode, body, "reply rejected: " + e.Message);
+                                throw;
+                            }
+                            LogAttempt(log, url, json, attempt, sw, (int)resp.StatusCode, body, null);
+                            return parsed;
                         }
                     }
                 }
@@ -391,7 +439,7 @@ namespace AIColonists.Inference
         }
 
         /// <summary>JSON-escapes a string (quotes, backslashes, control chars — prompts contain newlines) and appends it with surrounding quotes.</summary>
-        private static void AppendJsonString(StringBuilder sb, string s)
+        internal static void AppendJsonString(StringBuilder sb, string s)
         {
             sb.Append('"');
             if (s != null)

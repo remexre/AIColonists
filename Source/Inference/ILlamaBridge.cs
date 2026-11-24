@@ -65,6 +65,7 @@ namespace AIColonists.Inference
         public int maxTokens = 80;   // Spec §3.1 Layer 1 budget
         public int optionCount = 0;  // number of affordances — sizes the impulse_id enum (Spec §7.2)
         public bool disableReasoning; // sends reasoning_effort:"none" (Settings.DisableReasoning)
+        public string logLabel;      // not sent: names the call in the prompt log (PromptLog)
     }
 
     /// <summary>Parsed + validated Layer 1 output (matches GbnfSchemas.Layer1, Spec §7.2).</summary>
@@ -89,6 +90,7 @@ namespace AIColonists.Inference
         public float topP = 1.0f;    // off: min_p trims the tail
         public int maxTokens = 150;  // Spec §3.1 Layer 2 budget (~120 tokens typical)
         public bool disableReasoning; // sends reasoning_effort:"none" (Settings.DisableReasoning)
+        public string logLabel;      // not sent: names the call in the prompt log (PromptLog)
     }
 
     /// <summary>One decision for one colonist (Spec §7.3). FIELD NAMES ARE SNAKE_CASE ON PURPOSE — the server emits them verbatim.</summary>
@@ -120,6 +122,7 @@ namespace AIColonists.Inference
         public float topP = 1.0f;    // off: min_p trims the tail
         public int maxTokens = 350;  // Spec §3.1 Layer 3 budget (~250 tokens typical)
         public bool disableReasoning; // sends reasoning_effort:"none" (Settings.DisableReasoning)
+        public string logLabel;      // not sent: names the call in the prompt log (PromptLog)
     }
 
     /// <summary>One relationship nudge (Spec §7.4). Server values are clamped to ±0.05 at apply time.</summary>
