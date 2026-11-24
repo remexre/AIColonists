@@ -142,6 +142,7 @@ namespace AIColonists.Tests
             await Test_Layer2ServerDownResilienceAsync();
             await Test_TransportSingleFlightAsync();      // Mono concurrent-send fix: gate serializes all layers
             await Test_TransportRetryOnSendFailureAsync(); // one retry on transport failure only
+            await Test_UserAgentAsync(); // RimWorld-identifying User-Agent on both HTTP pools
             await Test_ProviderTestAsync(); // settings "Test providers" button: probe outcomes + tester + dialog smoke
             Test_SettingsPage(); // every Settings field has a control; scrolling; reset-to-defaults scope
             Test_MemoryThoughtDefs(); // mood bridge: def wiring + calibration (no code — granted by vanilla machinery)
@@ -2221,6 +2222,55 @@ namespace AIColonists.Tests
             Check(accepts >= 2, "a fresh connection was made after the first failure (the retry actually retried)");
 
             server.Stop();
+        }
+
+        static async Task Test_UserAgentAsync()
+        {
+            Section("Transport: User-Agent identifies RimWorld + the mod");
+            Check(LlamaServerClient.UserAgent == "RimWorld/1.7.5014 AIColonists (+https://github.com/ptown99/AIColonists)",
+                "User-Agent string is built from the game version: " + LlamaServerClient.UserAgent);
+
+            // Connection #1 (SharedHttp) is read then dropped with no response, which forces the retry onto RetryHttp
+            // (connection #2) — so both pools' headers get captured.
+            int port = FreeLoopbackPort();
+            var server = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+            server.Start();
+            byte[] resp = HttpOkResponse(ChatEnvelope("{\"impulse_id\":1,\"inner_voice\":\"ua\",\"spoken_mutter\":\"ok\"}"));
+            var requests = new List<string>();
+            var serverTask = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    System.Net.Sockets.TcpClient c;
+                    try { c = await server.AcceptTcpClientAsync(); }
+                    catch { break; }
+                    using (var s = c.GetStream())
+                    {
+                        // Read the whole request here (not via DrainRequest, whose first Read would block once it's consumed).
+                        var buf = new byte[8192];
+                        var sb = new System.Text.StringBuilder();
+                        int rd;
+                        do { rd = s.Read(buf, 0, buf.Length); sb.Append(System.Text.Encoding.UTF8.GetString(buf, 0, Math.Max(rd, 0))); }
+                        while (rd > 0 && s.DataAvailable);
+                        int n;
+                        lock (requests) { requests.Add(sb.ToString()); n = requests.Count; }
+                        if (n > 1) await s.WriteAsync(resp, 0, resp.Length);
+                    }
+                    c.Close();
+                }
+            });
+
+            var client = new LlamaServerClient(new Settings { Layer1ServerUrl = "http://127.0.0.1:" + port, RequestTimeoutMs = 5000 });
+            try { await client.RequestLayer1Async(new Layer1Request { model = "m", systemPrompt = "S", userPrompt = "U", optionCount = 3 }); }
+            catch { /* asserted below via what the server saw */ }
+            server.Stop();
+
+            string expected = "User-Agent: " + LlamaServerClient.UserAgent;
+            List<string> seen;
+            lock (requests) seen = new List<string>(requests);
+            Check(seen.Count >= 2, "server saw the first send and the retry (" + seen.Count + " requests)");
+            Check(seen.Count >= 1 && seen[0].Contains(expected), "first send (shared pool) carries the User-Agent");
+            Check(seen.Count >= 2 && seen[1].Contains(expected), "retry (fresh pool) carries the User-Agent");
         }
 
         /// <summary>Raw HTTP response with an arbitrary status line (for error-path probes).</summary>

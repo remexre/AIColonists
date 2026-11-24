@@ -702,6 +702,9 @@ namespace RimWorld.Planet
 
 namespace RimWorld
 {
+    // [CONFIRMED] RimWorld.VersionControl.CurrentVersionString (decompiled 1.7: "major.minor.build", e.g. "1.7.5014").
+    public static class VersionControl { public static string CurrentVersionString => "1.7.5014"; }
+
     // [CONFIRMED decompiled 2026-11-15] Faction is in the RIMWORLD namespace (Verse.Faction does not exist in 1.6);
     // OfPlayer is a static property — MapPawns.FreeColonists => FreeHumanlikesOfFaction(Faction.OfPlayer).
     public class Faction

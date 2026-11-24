@@ -27,11 +27,30 @@ namespace AIColonists.Inference
     /// </summary>
     public class LlamaServerClient : ILlamaBridge
     {
+        /// <summary>
+        /// Sent on every request so proxies and server logs can tell this traffic apart: "RimWorld/1.7.5014 AIColonists
+        /// (+https://github.com/ptown99/AIColonists)". .NET's HttpClient sends no User-Agent at all by default, so hosted
+        /// gateways and shared servers only saw anonymous requests. The game version is read once; if it can't be read
+        /// (or isn't a valid product version) the RimWorld token goes without one. Declared before SharedHttp/RetryHttp on
+        /// purpose: static fields initialize in declaration order, and NewHttpClient reads this.
+        /// </summary>
+        public static readonly string UserAgent = BuildUserAgent();
+
+        private static string BuildUserAgent()
+        {
+            string game = null;
+            try { game = RimWorld.VersionControl.CurrentVersionString; } // "1.7.5014" (decompiled 1.7)
+            catch { /* never let this block requests — just leave the version off */ }
+            if (string.IsNullOrEmpty(game) || !System.Text.RegularExpressions.Regex.IsMatch(game, @"^[0-9A-Za-z.\-]+$"))
+                game = null;
+            return (game == null ? "RimWorld" : "RimWorld/" + game) + " AIColonists (+https://github.com/ptown99/AIColonists)";
+        }
+
         // One pooled HttpClient for the whole process (socket reuse). We deliberately do NOT mutate
         // SharedHttp.Timeout per instance: once any request has been sent, .NET forbids changing client
         // properties ("This instance has already started one or more requests"). Per-request timeouts go
         // through a CancellationTokenSource below instead — same semantics, no shared-state mutation.
-        private static readonly HttpClient SharedHttp = new HttpClient();
+        private static readonly HttpClient SharedHttp = NewHttpClient();
 
         // SINGLE-FLIGHT GATE (live-verified failure 2026-11-13): Mono's pooled HttpClient throws HttpRequestException
         // ("An error occurred while sending the request") when a second send starts on a client that still has an
@@ -46,7 +65,17 @@ namespace AIColonists.Inference
         // The shared pool may still hold the half-open connection that just failed (the server closed it but the
         // client hasn't noticed — the socket still looks connected), and reusing it fails identically. Harness-
         // verified 2026-11-13: retrying on SharedHttp after an aborted connection throws the same HttpRequestException.
-        private static readonly HttpClient RetryHttp = new HttpClient();
+        private static readonly HttpClient RetryHttp = NewHttpClient();
+
+        // Both pools send the same User-Agent. Default headers are set here, before any request: .NET won't allow
+        // changes to a client's properties once it has sent one.
+        private static HttpClient NewHttpClient()
+        {
+            var http = new HttpClient();
+            try { http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent); }
+            catch { /* a header we can't parse must never stop the mod from talking to its server */ }
+            return http;
+        }
 
         private readonly Settings settings;
 
